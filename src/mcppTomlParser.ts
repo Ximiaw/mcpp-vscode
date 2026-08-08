@@ -385,6 +385,14 @@ class Scanner {
     return { startCharacter: range.startCharacter, endCharacter: range.endCharacter };
   }
 
+  /** 单行范围转替换范围；跨行值（数组/多行串）返回 undefined，由调用方回退。 */
+  private static singleLineReplaceRange(range: TomlRange): ReplaceRange | undefined {
+    if (range.startLine !== range.endLine) {
+      return undefined;
+    }
+    return { startCharacter: range.startCharacter, endCharacter: range.endCharacter };
+  }
+
   private sectionResolution(): SectionResolution {
     if (this.currentSection === undefined) {
       return { kind: "top" };
@@ -613,6 +621,14 @@ class Scanner {
       const valuePath = containerPath.concat(keyNames);
       // 光标在 = 之后、值未开始（如 `kind = |`）。
       if (this.cursorReached()) {
+        // 光标后方同行还有值 token（光标恰在 token 首字符、或在 = 与 token
+        // 之间的空白上）时，替换范围要覆盖整个 token，否则补全插入后原文残留。
+        if (!this.atEol() && this.peek() !== "#") {
+          const ahead = this.scanValue(valuePath); // 光标落在 token 内时由 scanValue 捕获
+          this.captureValue(valuePath, ahead.kind, {
+            replaceRange: Scanner.singleLineReplaceRange(ahead.range) ?? this.emptyReplaceRange(),
+          });
+        }
         this.captureValue(valuePath, undefined);
       }
       // 值必须在同行开始（TOML 本就如此）；行尾没有值则按缺失处理。
@@ -725,7 +741,7 @@ class Scanner {
         // 字符串内容的替换范围：扩展到本行引号边界，并钳制在内容范围内。
         let replaceRange = this.emptyReplaceRange();
         if (insideString) {
-          const expanded = this.expandOnLine((ch) => ch === '"' || ch === "'");
+          const expanded = this.expandOnLine((ch) => ch === quote);
           const minCol = contentStart.line === cursor.line ? contentStart.col : 0;
           const maxCol =
             contentEnd.line === cursor.line ? contentEnd.col : this.lines[cursor.line]?.length ?? 0;
@@ -821,7 +837,7 @@ class Scanner {
     let end = this.pos();
     while (!this.atEol()) {
       const ch = this.peek();
-      if (ch === "," || ch === "]" || ch === "}" || ch === "#") {
+      if (ch === "," || ch === "]" || ch === "}" || ch === "[" || ch === "{" || ch === "#") {
         break;
       }
       this.col += 1;

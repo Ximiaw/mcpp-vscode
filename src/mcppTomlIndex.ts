@@ -137,31 +137,32 @@ export function mcppLibsIndexDir(home: string): string {
 }
 
 /**
- * 索引缓存键：
+ * 索引缓存键（含规范化后的 indexDir 前缀，避免缓存全局单文件时跨索引碰撞）：
  * - 有 .git/FETCH_HEAD → 其 mtime；没有则退到 .git/HEAD 的 mtime；
  * - 无 .git（项目级 path 索引）→ pkgs 下全部 .lua 文件清单 + 各文件 mtime 的摘要。
  */
 export function computeIndexCacheKey(indexDir: string, mtimeMs: MtimeFn, listFiles: ListFilesFn): string {
+  const keyPrefix = normalizeSep(indexDir);
   const fetchHeadMtime = mtimeMs(joinPath(indexDir, ".git", "FETCH_HEAD"));
   if (fetchHeadMtime !== undefined) {
-    return `git-fetch-head:${fetchHeadMtime}`;
+    return `${keyPrefix}:git-fetch-head:${fetchHeadMtime}`;
   }
   const headMtime = mtimeMs(joinPath(indexDir, ".git", "HEAD"));
   if (headMtime !== undefined) {
-    return `git-head:${headMtime}`;
+    return `${keyPrefix}:git-head:${headMtime}`;
   }
 
   const hash = createHash("sha256");
   const luaFiles = safeListFiles(listFiles, joinPath(indexDir, "pkgs"))
     .filter((file) => file.endsWith(".lua"))
     .sort();
-  const prefix = normalizeSep(indexDir) + "/";
+  const dirPrefix = keyPrefix + "/";
   for (const file of luaFiles) {
     const normalized = normalizeSep(file);
-    const relative = normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+    const relative = normalized.startsWith(dirPrefix) ? normalized.slice(dirPrefix.length) : normalized;
     hash.update(`${relative}:${mtimeMs(file) ?? "?"}\n`);
   }
-  return `files:${hash.digest("hex")}`;
+  return `${keyPrefix}:files:${hash.digest("hex")}`;
 }
 
 /** 索引年龄（天）：从 FETCH_HEAD（缺失则 HEAD）的 mtime 到现在；非 git 索引返回 undefined。 */
@@ -318,6 +319,9 @@ interface CachePayload {
 /**
  * 带缓存的候选加载：缓存键匹配且缓存格式认识则直接读缓存，
  * 否则重新扫描并写回缓存。缓存读写失败一律降级为重建，不抛错。
+ * 空扫描结果不写缓存：mcpp 缺失/损坏或 execParse 全部失败时若把空列表落盘，
+ * 缓存键会一直命中这份空缓存，补全永久为空；不写则下次 refresh 自然重试。
+ * （真实空索引极少见，代价只是每次重扫。）
  */
 export async function loadCandidates(opts: LoadCandidatesOptions): Promise<PackageCandidate[]> {
   const cached = await readValidCache(opts);
@@ -326,6 +330,9 @@ export async function loadCandidates(opts: LoadCandidatesOptions): Promise<Packa
   }
 
   const candidates = await scanPackageDescriptors(opts);
+  if (candidates.length === 0) {
+    return candidates;
+  }
   const payload: CachePayload = { format: CANDIDATE_CACHE_FORMAT, cacheKey: opts.cacheKey, candidates };
   try {
     await opts.writeCache(JSON.stringify(payload));

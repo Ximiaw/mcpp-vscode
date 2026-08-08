@@ -937,12 +937,36 @@ function createMcppTomlCompletionProvider(
     }
   };
 
+  // 裸名 "mcpp" 时在 PATH 上解析出绝对路径，让 resolveMcppHome 的自包含
+  // 布局判定有真实路径可用（shim 情形会被 registry 存在性检查挡下）。
+  let pathResolvedMcpp: string | undefined;
+  const resolveMcppOnPath = (): string | undefined => {
+    if (pathResolvedMcpp !== undefined) {
+      return pathResolvedMcpp;
+    }
+    const exeNames = process.platform === "win32" ? ["mcpp.exe", "mcpp.bat", "mcpp.cmd"] : ["mcpp"];
+    for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+      if (dir.length === 0) {
+        continue;
+      }
+      for (const exeName of exeNames) {
+        const candidate = path.join(dir, exeName);
+        if (fs.existsSync(candidate)) {
+          pathResolvedMcpp = candidate;
+          return candidate;
+        }
+      }
+    }
+    return undefined;
+  };
+
   const resolveIndexEnvironment = (uri: vscode.Uri): { indexDir: string; mcppExe: string } | undefined => {
     const configured = vscode.workspace.getConfiguration("mcpp", uri).get<string>("path", "").trim();
     const mcppExe = configured.length > 0 ? configured : "mcpp";
+    const exeForHome = mcppExe.includes("/") || mcppExe.includes("\\") ? mcppExe : resolveMcppOnPath();
     const home = resolveMcppHome({
       env: process.env,
-      mcppExePath: mcppExe.includes("/") || mcppExe.includes("\\") ? mcppExe : undefined,
+      mcppExePath: exeForHome,
       realpath: (candidate) => {
         try {
           return fs.realpathSync(candidate);
@@ -981,7 +1005,8 @@ function createMcppTomlCompletionProvider(
         if (!trusted) {
           return { exitCode: 1, stdout: "" };
         }
-        const result = await runProcess(env.mcppExe, ["xpkg", "parse", descriptorFile, "--json"]);
+        // 必须带超时：mcpp 挂起时跳过该文件，避免单飞锁被永久占用。
+        const result = await runProcess(env.mcppExe, ["xpkg", "parse", descriptorFile, "--json"], undefined, { timeoutMs: 30_000 });
         return { exitCode: result.exitCode, stdout: result.stdout };
       },
       readCache: readCacheFile,

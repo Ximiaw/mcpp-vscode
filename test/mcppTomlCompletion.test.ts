@@ -132,6 +132,23 @@ test("annotates stale index in package details", () => {
   assert.equal(silentZlib?.detail, "compat · 索引 45 天前更新");
 });
 
+test("bare-name version lookup follows the mcpp resolution ladder", () => {
+  const packages: readonly PackageCandidate[] = [
+    { namespace: "compat", name: "imgui", qualifiedName: "compat.imgui", versions: ["1.0"] },
+    { namespace: "mcpplibs", name: "imgui", qualifiedName: "mcpplibs.imgui", versions: ["2.0"] },
+    { namespace: "chriskohlhoff", name: "asio", qualifiedName: "chriskohlhoff.asio", versions: ["1.38.1"] },
+  ];
+  // 裸名 imgui 按阶梯命中 mcpplibs.imgui（不是按字母序的 compat.imgui）。
+  const suggestions = computeMcppTomlCompletions(["[dependencies]", "imgui = "], 1, 8, { packages });
+  assert.deepEqual(labels(suggestions), ["2.0"]);
+  // 完全限定名直达（引号键；不带引号的点分键是 TOML 嵌套表语义，不出版本候选）。
+  const qualified = computeMcppTomlCompletions(["[dependencies]", '"compat.imgui" = "'], 1, 16, { packages });
+  assert.deepEqual(labels(qualified), ["1.0"]);
+  // 其他命名空间的包裸名不可达（文档：其他命名空间一律写全）。
+  const unreachable = computeMcppTomlCompletions(["[dependencies]", "asio = "], 1, 7, { packages });
+  assert.deepEqual(unreachable, []);
+});
+
 test("suggests templates in free-key sections", () => {
   const features = computeMcppTomlCompletions(["[features]", ""], 1, 0);
   assert.ok(features.every((suggestion) => suggestion.kind === "template"));

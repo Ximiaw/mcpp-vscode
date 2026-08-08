@@ -394,3 +394,68 @@ test("contextAt 越界坐标被钳制而不抛错", () => {
   if (context.kind !== "key") return;
   assert.deepEqual(context.section, { kind: "known", group: "package" });
 });
+
+// ---- 回归：值槽位替换范围 / 引号停止符 / 裸值停止字符 ----
+
+test("contextAt 光标在 = 与值 token 之间的空白上：替换整个 token", () => {
+  const context = contextAt(["cmdline = true"], 0, 9);
+  assert.equal(context.kind, "value");
+  if (context.kind !== "value") return;
+  assert.deepEqual(context.keyPath, ["cmdline"]);
+  assert.equal(context.valueKind, "boolean");
+  assert.deepEqual(context.replaceRange, { startCharacter: 10, endCharacter: 14 });
+});
+
+test("contextAt 光标恰在值 token 首字符：替换范围覆盖整个 token", () => {
+  const context = contextAt(["cmdline = true"], 0, 10);
+  assert.equal(context.kind, "value");
+  if (context.kind !== "value") return;
+  assert.equal(context.valueKind, "boolean");
+  assert.deepEqual(context.replaceRange, { startCharacter: 10, endCharacter: 14 });
+});
+
+test("contextAt 光标在字符串 token 前的空白上：替换范围覆盖整个带引号 token", () => {
+  const context = contextAt(['name = "demo"'], 0, 6);
+  assert.equal(context.kind, "value");
+  if (context.kind !== "value") return;
+  assert.equal(context.valueKind, "string");
+  assert.equal(context.insideString, false);
+  assert.deepEqual(context.replaceRange, { startCharacter: 7, endCharacter: 13 });
+});
+
+test("contextAt 单引号字符串内的双引号不截断替换范围", () => {
+  const context = contextAt(["s = 'a\"b'"], 0, 7);
+  assert.equal(context.kind, "value");
+  if (context.kind !== "value") return;
+  assert.equal(context.valueKind, "string");
+  assert.equal(context.insideString, true);
+  assert.deepEqual(context.replaceRange, { startCharacter: 5, endCharacter: 8 });
+});
+
+test("contextAt 双引号字符串内的单引号不截断替换范围", () => {
+  const context = contextAt(["s = \"a'b\""], 0, 7);
+  assert.equal(context.kind, "value");
+  if (context.kind !== "value") return;
+  assert.equal(context.insideString, true);
+  assert.deepEqual(context.replaceRange, { startCharacter: 5, endCharacter: 8 });
+});
+
+test("裸值不停在 [ / { 之外的后续结构：x = 1 [dep", () => {
+  const document = parseMcppToml(["x = 1 [dep"]);
+  const keyValue = document.nodes[0] as TomlKeyValueNode;
+  assert.equal(keyValue.type, "keyValue");
+  assert.equal(keyValue.value?.kind, "integer");
+  assert.equal(keyValue.value?.text, "1");
+  assert.deepEqual(keyValue.value?.range, { startLine: 0, startCharacter: 4, endLine: 0, endCharacter: 5 });
+  const section = document.nodes[1] as TomlSectionNode;
+  assert.equal(section.type, "section");
+  assert.equal(section.open, true);
+  assert.deepEqual(section.segments.map((s) => s.name), ["dep"]);
+});
+
+test("裸值在 { 前停止：y = 2 {k = 1}", () => {
+  const keyValue = keyValueAt(["y = 2 {k = 1}"], 0);
+  assert.equal(keyValue.value?.kind, "integer");
+  assert.equal(keyValue.value?.text, "2");
+  assert.deepEqual(keyValue.value?.range, { startLine: 0, startCharacter: 4, endLine: 0, endCharacter: 5 });
+});

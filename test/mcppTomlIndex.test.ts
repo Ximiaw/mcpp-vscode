@@ -218,7 +218,7 @@ test("computeIndexCacheKey: 有 .git 时用 FETCH_HEAD 的 mtime", () => {
     writeFile(dir, ".git/HEAD", "ref: refs/heads/main\n");
     setMtime(fetchHead, 1_700_000_000_000);
     const key = computeIndexCacheKey(dir, realMtimeMs, realListFiles);
-    assert.match(key, /^git-fetch-head:1700000000/);
+    assert.ok(key.startsWith(`${dir}:git-fetch-head:1700000000`), key);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -230,9 +230,38 @@ test("computeIndexCacheKey: 无 FETCH_HEAD 时退到 HEAD", () => {
     const head = writeFile(dir, ".git/HEAD", "ref: refs/heads/main\n");
     setMtime(head, 1_700_000_000_000);
     const key = computeIndexCacheKey(dir, realMtimeMs, realListFiles);
-    assert.match(key, /^git-head:1700000000/);
+    assert.ok(key.startsWith(`${dir}:git-head:1700000000`), key);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeIndexCacheKey: 键含索引路径，不同目录相同 mtime 不碰撞", () => {
+  const dirA = makeTmpDir();
+  const dirB = makeTmpDir();
+  try {
+    // git 分支：两个索引的 FETCH_HEAD mtime 完全相同。
+    for (const dir of [dirA, dirB]) {
+      const fetchHead = writeFile(dir, ".git/FETCH_HEAD", "abc\n");
+      setMtime(fetchHead, 1_700_000_000_000);
+    }
+    assert.notEqual(
+      computeIndexCacheKey(dirA, realMtimeMs, realListFiles),
+      computeIndexCacheKey(dirB, realMtimeMs, realListFiles),
+    );
+    // files 分支：同样的文件清单与 mtime。
+    for (const dir of [dirA, dirB]) {
+      rmSync(join(dir, ".git"), { recursive: true, force: true });
+      const lua = writeFile(dir, "pkgs/z/zlib.lua", "package('zlib')\n");
+      setMtime(lua, 1_700_000_000_000);
+    }
+    assert.notEqual(
+      computeIndexCacheKey(dirA, realMtimeMs, realListFiles),
+      computeIndexCacheKey(dirB, realMtimeMs, realListFiles),
+    );
+  } finally {
+    rmSync(dirA, { recursive: true, force: true });
+    rmSync(dirB, { recursive: true, force: true });
   }
 });
 
@@ -241,7 +270,8 @@ test("computeIndexCacheKey: 无 .git 时用 pkgs 文件清单摘要，内容变�
   try {
     writeFile(dir, "pkgs/z/zlib.lua", "package('zlib')\n");
     const key1 = computeIndexCacheKey(dir, realMtimeMs, realListFiles);
-    assert.match(key1, /^files:[0-9a-f]{64}$/);
+    assert.ok(key1.startsWith(`${dir}:`), key1);
+    assert.match(key1, /:files:[0-9a-f]{64}$/);
 
     // 新增描述符 → 键变化
     writeFile(dir, "pkgs/o/openssl.lua", "package('openssl')\n");
@@ -545,4 +575,28 @@ test("loadCandidates: 缓存写失败不影响返回结果", async () => {
     writeCache: () => { throw new Error("disk full"); },
   }));
   assert.deepEqual(candidates.map((candidate) => candidate.qualifiedName), ["a"]);
+});
+
+test("loadCandidates: 空扫描结果不写缓存，修复后重试可恢复", async () => {
+  const writes: string[] = [];
+  const listFiles = () => ["/idx/pkgs/a/a.lua"];
+  // 第一次：mcpp 损坏，executor 全部失败 → 空结果，且不落盘。
+  const broken = fakeExecutor({ "a.lua": new Error("spawn mcpp ENOENT") });
+  const first = await loadCandidates(loadOptions({
+    listFiles,
+    execParse: broken,
+    writeCache: (content) => { writes.push(content); },
+  }));
+  assert.deepEqual(first, []);
+  assert.equal(writes.length, 0);
+
+  // 第二次：mcpp 修好，无缓存可读（readCache 仍返回 undefined）→ 重扫成功并写回。
+  const fixed = fakeExecutor({ "a.lua": { namespace: "", name: "a" } });
+  const second = await loadCandidates(loadOptions({
+    listFiles,
+    execParse: fixed,
+    writeCache: (content) => { writes.push(content); },
+  }));
+  assert.deepEqual(second.map((candidate) => candidate.qualifiedName), ["a"]);
+  assert.equal(writes.length, 1);
 });

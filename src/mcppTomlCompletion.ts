@@ -217,10 +217,16 @@ function packageSuggestions(
   }));
 }
 
-/** 依 mcpp 裸名解析阶梯匹配键名：完全限定 > 裸名。 */
+/** 依 mcpp 裸名解析阶梯匹配键名：完全限定 > mcpplibs > compat > 无命名空间；其余命名空间裸名不可达。 */
 function findPackage(packages: readonly PackageCandidate[], key: string): PackageCandidate | undefined {
-  return packages.find((pkg) => pkg.qualifiedName === key)
-    ?? packages.find((pkg) => pkg.name === key);
+  const qualified = packages.find((pkg) => pkg.qualifiedName === key);
+  if (qualified !== undefined) {
+    return qualified;
+  }
+  const byName = packages.filter((pkg) => pkg.name === key);
+  return byName.find((pkg) => pkg.namespace === "mcpplibs")
+    ?? byName.find((pkg) => pkg.namespace === "compat")
+    ?? byName.find((pkg) => pkg.namespace.length === 0);
 }
 
 function versionSuggestions(
@@ -258,10 +264,12 @@ export function computeMcppTomlCompletions(
 
   if (context.kind === "section-header") {
     // parser 的替换范围从段名 token 开始；段头建议插入的是完整 "[xxx]"，
-    // 需要把范围扩展到本行的 "["，避免留下 "[["。
+    // 需要把范围扩展到本行的 "["，避免留下 "[["。仅当 "[" 是行内首个
+    // 非空白字符时才扩展（section-header 上下文正常都满足，防御奇怪输入）。
     const lineText = (lines[line] ?? "").replace(/\r$/, "");
     const bracket = lineText.indexOf("[");
-    const range = bracket >= 0
+    const firstNonWs = lineText.search(/\S/);
+    const range = bracket >= 0 && bracket === firstNonWs
       ? { startCharacter: bracket, endCharacter: context.replaceRange.endCharacter }
       : context.replaceRange;
     return sectionHeaderSuggestions(range);
