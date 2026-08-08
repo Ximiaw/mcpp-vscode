@@ -38,7 +38,7 @@ export interface McppTomlCompletionData {
   staleThresholdDays?: number;
 }
 
-interface SectionHeaderSpec {
+export interface SectionHeaderSpec {
   group: string;
   label: string;
   /** snippet 形式的段头（含 ${1:...} 占位）。 */
@@ -48,7 +48,7 @@ interface SectionHeaderSpec {
 
 // 段头结构清单：TOML 结构语法，非字段语义。出处：mcpp 文档 02/03/05/06
 // 与 src/manifest/toml.cppm 的段清单。
-const SECTION_HEADERS: readonly SectionHeaderSpec[] = [
+export const SECTION_HEADERS: readonly SectionHeaderSpec[] = [
   { group: "package", label: "[package]", header: "[package]", detail: "包元数据" },
   { group: "lib", label: "[lib]", header: "[lib]", detail: "库根模块约定" },
   { group: "build", label: "[build]", header: "[build]", detail: "构建配置" },
@@ -71,6 +71,7 @@ const SECTION_HEADERS: readonly SectionHeaderSpec[] = [
   { group: "target", label: "[target.<triple>]", header: "[target.${1:x86_64-linux-gnu}]", detail: "按目标三元组的配置" },
   { group: "pack", label: "[pack]", header: "[pack]", detail: "mcpp pack 打包配置" },
   { group: "pack.bundle-project", label: "[pack.bundle-project]", header: "[pack.bundle-project]", detail: "vendored 过滤策略微调" },
+  { group: "indices", label: "[indices]", header: "[indices]", detail: "项目级索引重定向" },
   { group: "tools.overrides", label: "[tools.overrides]", header: "[tools.overrides]", detail: "host 工具二进制覆盖" },
   { group: "language", label: "[language]", header: "[language]", detail: "旧版兼容字段；新项目请用 [package].standard" },
 ];

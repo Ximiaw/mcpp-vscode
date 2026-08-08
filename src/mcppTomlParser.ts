@@ -126,6 +126,7 @@ const KNOWN_SECTIONS: ReadonlySet<string> = new Set([
   "dev-dependencies",
   "build-dependencies",
   "features",
+  "indices",
   "capabilities",
   "runtime",
   "resources",
