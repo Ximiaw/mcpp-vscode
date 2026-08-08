@@ -152,7 +152,13 @@
           "type": "boolean",
           "default": false,
           "scope": "resource",
-          "description": "为 mcpp.toml 提供代码补全：段头、各段字段、枚举/布尔取值，以及依赖与 feature 的写法模板。默认关闭。注意：该功能尚不完善，字段表可能与最新 mcpp 不同步或存在缺陷，仅供参考。"
+          "description": "为 mcpp.toml 提供代码补全：段头、依赖包名/版本（来自本机 mcpp 索引缓存）与写法模板。默认关闭。"
+        },
+        "mcpp.tomlCompletionIndexStaleDays": {
+          "type": "number",
+          "default": 30,
+          "scope": "resource",
+          "description": "包索引超过多少天未更新时，在依赖候选中提示可运行 mcpp index update 刷新；0 表示关闭提示。"
         }
       }
     },

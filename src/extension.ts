@@ -1,4 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import process from "node:process";
 
 import * as vscode from "vscode";
@@ -25,7 +28,7 @@ import {
 } from "./llvmTools";
 import { CLI_COMMANDS } from "./commands";
 import { McppCliController } from "./cliController";
-import { runClangdCheck, runToolVersion, type ToolVersionResult } from "./process";
+import { runClangdCheck, runProcess, runToolVersion, type ToolVersionResult } from "./process";
 import {
   configurationReadyAfterRestart,
   configurationAffectsModuleSupport,
@@ -45,7 +48,15 @@ import {
 } from "./workflow";
 import { classifyTaskExit, type TaskCompletion } from "./tasks";
 import { MCPP_MANIFEST_GLOB, registerInProjectContext } from "./inProject";
-import { computeMcppTomlCompletions } from "./mcppTomlCompletion";
+import { computeMcppTomlCompletions, type McppTomlCompletionData } from "./mcppTomlCompletion";
+import {
+  computeIndexCacheKey,
+  indexAgeDays,
+  loadCandidates,
+  mcppLibsIndexDir,
+  resolveMcppHome,
+  type PackageCandidate,
+} from "./mcppTomlIndex";
 
 const COMMAND_CONFIGURE = "mcpp.configureClangd";
 const COMMAND_REFRESH = "mcpp.refreshCompilationDatabase";
@@ -853,48 +864,183 @@ async function autoConfigureModulesWizard(
   appendOutputLine(output, `[一键配置] 一键配置完成。clangd：${resolvedClangd.path}`);
 }
 
-// mcpp.toml 的补全建议由纯函数 computeMcppTomlCompletions 计算，这里只做 vscode 类型映射。
+// mcpp.toml 的补全建议由纯函数 computeMcppTomlCompletions 计算，这里只做
+// vscode 类型映射与数据注入（index 候选的加载与缓存）。
 const mcppTomlCompletionKinds = {
   section: vscode.CompletionItemKind.Folder,
-  key: vscode.CompletionItemKind.Field,
-  value: vscode.CompletionItemKind.EnumMember,
+  package: vscode.CompletionItemKind.Module,
+  version: vscode.CompletionItemKind.Value,
   template: vscode.CompletionItemKind.Snippet,
 } as const;
 
-const mcppTomlCompletionProvider: vscode.CompletionItemProvider = {
-  provideCompletionItems(document, position) {
-    // mcpp.toml 补全默认关闭（mcpp.tomlCompletion），按文档作用域读取。
-    if (!vscode.workspace.getConfiguration("mcpp", document.uri).get<boolean>("tomlCompletion", false)) {
+interface McppTomlCompletionState {
+  cacheKey: string | undefined;
+  packages: PackageCandidate[];
+  loading: Promise<void> | undefined;
+}
+
+/** 扩展存储里的候选缓存文件名（loadCandidates 的 readCache/writeCache 落点）。 */
+const TOML_INDEX_CACHE_FILE = "mcpp-toml-index-cache.json";
+
+function listLuaDescriptors(dir: string): string[] {
+  const results: string[] = [];
+  const walk = (current: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name.endsWith(".lua")) {
+        results.push(full);
+      }
+    }
+  };
+  walk(dir);
+  return results;
+}
+
+function mtimeMsOf(filePath: string): number | undefined {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+function createMcppTomlCompletionProvider(
+  extensionContext: vscode.ExtensionContext,
+): vscode.CompletionItemProvider {
+  const state: McppTomlCompletionState = { cacheKey: undefined, packages: [], loading: undefined };
+
+  const cacheFilePath = (): string => {
+    const dir = extensionContext.globalStorageUri.fsPath;
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, TOML_INDEX_CACHE_FILE);
+  };
+  const readCacheFile = (): string | undefined => {
+    try {
+      return fs.readFileSync(cacheFilePath(), "utf8");
+    } catch {
       return undefined;
     }
-    const lines: string[] = [];
-    for (let line = 0; line <= position.line; line += 1) {
-      lines.push(document.lineAt(line).text);
+  };
+  const writeCacheFile = (content: string): void => {
+    try {
+      fs.writeFileSync(cacheFilePath(), content, "utf8");
+    } catch {
+      // 缓存写失败不致命：下次补全重建即可。
     }
-    const textBefore = lines[position.line].slice(0, position.character);
-    return computeMcppTomlCompletions(lines, position.line, position.character).map((suggestion) => {
-      const item = new vscode.CompletionItem(
-        suggestion.label,
-        mcppTomlCompletionKinds[suggestion.kind],
-      );
-      item.detail = suggestion.detail;
-      if (suggestion.documentation !== undefined) {
-        item.documentation = new vscode.MarkdownString(suggestion.documentation);
-      }
-      if (suggestion.insertSnippet !== undefined) {
-        item.insertText = new vscode.SnippetString(suggestion.insertSnippet);
-      }
-      if (suggestion.kind === "section") {
-        // 段头建议要覆盖已输入的 "[xxx"，否则默认词范围会留下多余的 "["。
-        const bracket = textBefore.lastIndexOf("[");
-        if (bracket >= 0) {
-          item.range = new vscode.Range(position.line, bracket, position.line, position.character);
+  };
+
+  const resolveIndexEnvironment = (uri: vscode.Uri): { indexDir: string; mcppExe: string } | undefined => {
+    const configured = vscode.workspace.getConfiguration("mcpp", uri).get<string>("path", "").trim();
+    const mcppExe = configured.length > 0 ? configured : "mcpp";
+    const home = resolveMcppHome({
+      env: process.env,
+      mcppExePath: mcppExe.includes("/") || mcppExe.includes("\\") ? mcppExe : undefined,
+      realpath: (candidate) => {
+        try {
+          return fs.realpathSync(candidate);
+        } catch {
+          return candidate;
         }
-      }
-      return item;
+      },
+      exists: (candidate) => fs.existsSync(candidate),
+      homedir: () => os.homedir(),
     });
-  },
-};
+    const indexDir = mcppLibsIndexDir(home);
+    return fs.existsSync(path.join(indexDir, "pkgs")) ? { indexDir, mcppExe } : undefined;
+  };
+
+  // 后台重建候选缓存。仅在受信任工作区 spawn mcpp；未受信任时只读缓存文件。
+  const refresh = (uri: vscode.Uri): void => {
+    const env = resolveIndexEnvironment(uri);
+    if (env === undefined) {
+      state.cacheKey = undefined;
+      state.packages = [];
+      return;
+    }
+    const cacheKey = computeIndexCacheKey(env.indexDir, mtimeMsOf, listLuaDescriptors);
+    if (cacheKey === state.cacheKey) {
+      return;
+    }
+    if (state.loading !== undefined) {
+      return;
+    }
+    const trusted = vscode.workspace.isTrusted;
+    state.loading = loadCandidates({
+      indexDir: env.indexDir,
+      cacheKey,
+      listFiles: listLuaDescriptors,
+      execParse: async (descriptorFile) => {
+        if (!trusted) {
+          return { exitCode: 1, stdout: "" };
+        }
+        const result = await runProcess(env.mcppExe, ["xpkg", "parse", descriptorFile, "--json"]);
+        return { exitCode: result.exitCode, stdout: result.stdout };
+      },
+      readCache: readCacheFile,
+      writeCache: writeCacheFile,
+    }).then((packages) => {
+      state.packages = packages;
+      state.cacheKey = cacheKey;
+    }).catch(() => {
+      // 扫描失败：保留旧候选，下一次补全再试。
+    }).finally(() => {
+      state.loading = undefined;
+    });
+  };
+
+  return {
+    provideCompletionItems(document, position) {
+      // mcpp.toml 补全由 mcpp.tomlCompletion 控制（默认关闭），按文档作用域读取。
+      if (!vscode.workspace.getConfiguration("mcpp", document.uri).get<boolean>("tomlCompletion", false)) {
+        return undefined;
+      }
+      const lines: string[] = [];
+      for (let line = 0; line <= position.line; line += 1) {
+        lines.push(document.lineAt(line).text);
+      }
+      // 缓存键变化在后台重建，本次补全用当前已有候选。
+      refresh(document.uri);
+      const env = resolveIndexEnvironment(document.uri);
+      const data: McppTomlCompletionData = {
+        packages: state.packages,
+        indexAgeDays: env === undefined
+          ? undefined
+          : indexAgeDays(env.indexDir, mtimeMsOf),
+        staleThresholdDays: vscode.workspace
+          .getConfiguration("mcpp", document.uri)
+          .get<number>("tomlCompletionIndexStaleDays", 30),
+      };
+      return computeMcppTomlCompletions(lines, position.line, position.character, data).map((suggestion) => {
+        const item = new vscode.CompletionItem(
+          suggestion.label,
+          mcppTomlCompletionKinds[suggestion.kind],
+        );
+        item.detail = suggestion.detail;
+        if (suggestion.documentation !== undefined) {
+          item.documentation = new vscode.MarkdownString(suggestion.documentation);
+        }
+        if (suggestion.insertSnippet !== undefined) {
+          item.insertText = new vscode.SnippetString(suggestion.insertSnippet);
+        }
+        item.range = new vscode.Range(
+          position.line,
+          suggestion.range.startCharacter,
+          position.line,
+          suggestion.range.endCharacter,
+        );
+        return item;
+      });
+    },
+  };
+}
 
 export async function activate(extensionContext: vscode.ExtensionContext): Promise<void> {
   moduleStatusByProject.clear();
@@ -1074,10 +1220,11 @@ export async function activate(extensionContext: vscode.ExtensionContext): Promi
     ...cliController.register(),
     vscode.languages.registerCompletionItemProvider(
       { language: "mcpp-toml" },
-      mcppTomlCompletionProvider,
+      createMcppTomlCompletionProvider(extensionContext),
       "[",
       "=",
       '"',
+      ".",
     ),
     vscode.commands.registerCommand(COMMAND_CONFIGURE, runGuarded(async () => {
       const project = findCurrentProject();
