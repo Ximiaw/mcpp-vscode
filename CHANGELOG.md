@@ -15,7 +15,7 @@
   显式刷新会分别报告 CDB 生成与 clangd 协调结果。
 - 对齐 mcpp #387 的最终 workspace 契约：virtual workspace 根不作为单一 clangd 工程，
   扩展消费当前活动 member 根的 CDB；rooted workspace 仍按根 package 处理。
-## 0.4.0（未发布）
+## 0.4.0 - 2026-09-26
 
 ### Changed
 
