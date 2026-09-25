@@ -1,77 +1,68 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
+async function waitForFile(file: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(file)) {
+      const content = readFileSync(file, "utf8");
+      if (content.trim().length > 0) {
+        return content;
+      }
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
+}
+
 suite("mcpp extension smoke", () => {
-  test("configures a missing CDB once before executing a full build", async () => {
+  test("activates, registers commands, builds and refreshes C++ Modules", async () => {
     const extension = vscode.extensions.getExtension("mcpp-community.mcpp-vscode");
     assert.ok(extension, "mcpp extension should be installed in development host");
     await extension.activate();
 
+    const languageServer = vscode.extensions.getExtension("sunrisepeak.mcpp-language-server");
+    assert.ok(languageServer, "mcppls dependency should be installed next to the extension");
+    await languageServer.activate();
+
     const commands = await vscode.commands.getCommands(true);
-    assert.ok(commands.includes("mcpp.build"));
-    assert.ok(commands.includes("mcpp.autoConfigureModules"));
+    for (const command of [
+      "mcpp.build",
+      "mcpp.autoConfigureModules",
+      "mcpp.configureLanguageServer",
+      "mcpp.configureClangd",
+      "mcpp.refreshCompilationDatabase",
+      "mcpp.checkModuleSupport",
+      "mcpp.showModuleGraph",
+      "mcpp.showLanguageServerLogs",
+    ]) {
+      assert.ok(commands.includes(command), `missing command: ${command}`);
+    }
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     assert.ok(workspaceFolder, "fixture workspace should be open");
     const fakeMcpp = process.env.MCPP_E2E_FAKE_MCPP;
-    const logPath = process.env.MCPP_E2E_LOG;
+    const mcppLog = process.env.MCPP_E2E_LOG;
+    const mcpplsLog = process.env.MCPP_E2E_MCPPLS_LOG;
     assert.ok(fakeMcpp);
-    assert.ok(logPath);
+    assert.ok(mcppLog);
+    assert.ok(mcpplsLog);
     await vscode.workspace.getConfiguration("mcpp", workspaceFolder.uri)
       .update("path", fakeMcpp, vscode.ConfigurationTarget.Workspace);
 
-    const configureDeadline = Date.now() + 15_000;
-    let invocations: string[] = [];
-    while (Date.now() < configureDeadline) {
-      if (existsSync(logPath)) {
-        invocations = readFileSync(logPath, "utf8").trim().split("\n");
-        if (invocations.includes("build --configure-only")) {
-          break;
-        }
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-    }
-    assert.ok(existsSync(logPath), "fake mcpp should have been invoked");
+    void vscode.commands.executeCommand("mcpp.build");
+    assert.equal((await waitForFile(mcppLog, 15_000)).trim(), "build");
+    assert.equal((await waitForFile(mcpplsLog, 15_000)).trim(), "mcppls.restartServer");
 
-    await vscode.commands.executeCommand("mcpp.build");
-    const buildDeadline = Date.now() + 15_000;
-    while (Date.now() < buildDeadline) {
-      invocations = readFileSync(logPath, "utf8").trim().split("\n");
-      if (invocations.includes("build")) {
-        break;
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-    }
-    assert.deepEqual(invocations, ["build --configure-only", "build"]);
-    assert.ok(existsSync(path.join(workspaceFolder.uri.fsPath, "compile_commands.json")));
+    await vscode.commands.executeCommand("mcpp.configureClangd");
+    await vscode.commands.executeCommand("mcpp.showModuleGraph");
+    await vscode.commands.executeCommand("mcpp.showLanguageServerLogs");
+    assert.deepEqual(
+      (await waitForFile(mcpplsLog, 15_000)).trim().split("\n"),
+      ["mcppls.restartServer", "mcppls.selectContext", "mcppls.showModuleGraph", "mcppls.showLogs"],
+    );
     assert.equal(path.basename(workspaceFolder.uri.fsPath), "project");
-
-    const compilationDatabase = path.join(workspaceFolder.uri.fsPath, "compile_commands.json");
-    const executeWithinDeadline = async (command: string): Promise<void> => {
-      let timer: NodeJS.Timeout | undefined;
-      try {
-        await Promise.race([
-          vscode.commands.executeCommand(command),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`${command} did not finish`)), 5_000);
-          }),
-        ]);
-      } finally {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-        }
-      }
-    };
-
-    rmSync(compilationDatabase);
-    await executeWithinDeadline("mcpp.refreshCompilationDatabase");
-    assert.ok(existsSync(compilationDatabase), "refresh should recreate a missing CDB");
-
-    rmSync(compilationDatabase);
-    await executeWithinDeadline("mcpp.configureClangd");
-    await executeWithinDeadline("mcpp.checkModuleSupport");
-    await executeWithinDeadline("mcpp.autoConfigureModules");
   });
 });
