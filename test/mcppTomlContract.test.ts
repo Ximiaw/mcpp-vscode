@@ -187,17 +187,15 @@ test("模板键契约：[features] 表形式与数组简写被接受", { skip: s
 // provider 绑定在「无包 require 该能力」时不解析，静默通过；generated_files
 // 的条目会在源 glob 展开前写入工程树，这里同时验证生成机制生效（编译成功
 // 即说明模块文件被正常纳入构建）。
-test("模板实例契约：capabilities / xlings / tools.overrides / generated_files", { skip: skipReason, timeout: 120_000 }, async () => {
+test("模板实例契约：capabilities / xlings.workspace / tools.overrides / generated_files", { skip: skipReason, timeout: 120_000 }, async () => {
   const run = await buildWith(
     [
       "[capabilities]",
       'blas = "compat.openblas"',
       "",
       "[xlings.workspace]",
-      'clang = "20.1.7"',
+      'node = "24.19.0"',
       "",
-      "[xlings.envs]",
-      'FOO = "1"',
       "",
       "[tools.overrides]",
       '"compat.protobuf:protoc" = "/usr/bin/protoc"',
@@ -209,7 +207,7 @@ test("模板实例契约：capabilities / xlings / tools.overrides / generated_f
       "",
     ].join("\n"),
   );
-  assertClean(run, "模板实例（capabilities/xlings/tools.overrides/generated_files）");
+  assertClean(run, "模板实例（capabilities/xlings.workspace/tools.overrides/generated_files）");
 });
 
 test("条件段规则：[target.'cfg(windows)'.build] 接受 build inputs", { skip: skipReason, timeout: 120_000 }, async () => {

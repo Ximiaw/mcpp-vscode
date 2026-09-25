@@ -8,7 +8,16 @@ export const CLI_COMMANDS = {
   showToolchains: "mcpp.showToolchains",
   installToolchain: "mcpp.installToolchain",
   selectDefaultToolchain: "mcpp.selectDefaultToolchain",
+  configureLanguageServer: "mcpp.configureLanguageServer",
+  refreshCompilationDatabase: "mcpp.refreshCompilationDatabase",
+  checkModuleSupport: "mcpp.checkModuleSupport",
   autoConfigureModules: "mcpp.autoConfigureModules",
+  showModuleGraph: "mcpp.showModuleGraph",
+  showLanguageServerLogs: "mcpp.showLanguageServerLogs",
+} as const;
+
+export const DEPRECATED_COMMANDS = {
+  configureClangd: "mcpp.configureClangd",
 } as const;
 
 export const quickMenuStatusText = "$(tools) mcpp: 快捷菜单";
@@ -27,8 +36,10 @@ export const quickMenuItems: readonly QuickMenuItem[] = [
   { label: "$(list-unordered) 查看工具链", command: CLI_COMMANDS.showToolchains, group: "toolchain" },
   { label: "$(cloud-download) 安装工具链", command: CLI_COMMANDS.installToolchain, group: "toolchain" },
   { label: "$(settings-gear) 选择全局默认工具链", command: CLI_COMMANDS.selectDefaultToolchain, group: "toolchain" },
-  { label: "$(symbol-interface) 配置 clangd", command: "mcpp.configureClangd", group: "ide" },
-  { label: "$(database) 刷新编译数据库", command: "mcpp.refreshCompilationDatabase", group: "ide" },
-  { label: "$(check) 检查模块支持", command: "mcpp.checkModuleSupport", group: "ide" },
-  { label: "$(rocket) 一键配置模块代码提示", command: CLI_COMMANDS.autoConfigureModules, group: "ide" },
+  { label: "$(symbol-interface) 选择 C++ 模块分析上下文", command: CLI_COMMANDS.configureLanguageServer, group: "ide" },
+  { label: "$(database) 刷新模块构建描述", command: CLI_COMMANDS.refreshCompilationDatabase, group: "ide" },
+  { label: "$(check) 重启 C++ Modules 语言服务", command: CLI_COMMANDS.checkModuleSupport, group: "ide" },
+  { label: "$(type-hierarchy) 查看模块图", command: CLI_COMMANDS.showModuleGraph, group: "ide" },
+  { label: "$(output) 打开 C++ Modules 日志", command: CLI_COMMANDS.showLanguageServerLogs, group: "ide" },
+  { label: "$(rocket) 一键构建并刷新模块语言服务", command: CLI_COMMANDS.autoConfigureModules, group: "ide" },
 ];

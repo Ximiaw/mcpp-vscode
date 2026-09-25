@@ -27,6 +27,12 @@ test("suggests section headers on a partial bracket line", () => {
   assert.equal(targets?.insertSnippet, "[targets.${1:name}]");
 });
 
+test("does not suggest the removed xlings.envs section", () => {
+  const suggestions = computeMcppTomlCompletions(["[xl"], 0, 3);
+  assert.ok(!labels(suggestions).includes("[xlings.envs]"));
+  assert.ok(labels(suggestions).includes("[xlings.workspace]"));
+});
+
 test("offers nothing inside [[...]] array-table headers", () => {
   // mcpp manifest 不使用 TOML 数组表（[[...]]）：[[ 内不出建议，
   // 避免把用户意图的数组表悄悄替换成普通段 [x]。
