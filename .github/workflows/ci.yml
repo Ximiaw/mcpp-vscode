@@ -27,6 +27,8 @@ jobs:
       - run: npm run package
       - name: Verify VSIX archive
         run: unzip -t mcpp-vscode-*.vsix
+      - name: Verify extension dependency is declared
+        run: node -e 'const p=require("./package.json"); if (p.extensionDependencies?.[0] !== "sunrisepeak.mcpp-language-server") process.exit(1)'
 
   extension-host-e2e:
     runs-on: ubuntu-latest
@@ -39,3 +41,7 @@ jobs:
       - run: npm ci
       - name: Run Extension Host smoke tests
         run: xvfb-run -a npm run test:e2e
+      - name: Check packaged extension is not a second language client
+        run: |
+          test ! -e dist/src/languageClient.js
+          ! rg -n 'vscode-languageclient|mcppls\.serve' dist/src package.json

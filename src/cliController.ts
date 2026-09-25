@@ -15,24 +15,17 @@ import {
   type ToolchainItem,
 } from "./cli";
 import type { McppProjectDiscovery } from "./discovery";
-import { runConfigureOnly as runConfigureOnlyProcess } from "./configureOnly";
-import { runProcess, type ProcessResult } from "./process";
+import { runProcess } from "./process";
 import {
   McppOperationRegistry,
   classifyTaskExit,
   projectTaskPlan,
-  shouldReconcileAfterTask,
+  shouldRefreshLanguageServerAfterTask,
   type ProjectTaskKind,
   type TaskCompletion,
 } from "./tasks";
 import { CLI_COMMANDS, quickMenuItems, quickMenuStatusText } from "./commands";
 import { runNewProjectFlow, validateNewProjectName } from "./newProject";
-import {
-  mcppModuleSetupCommands,
-  type ModuleSetupCommand,
-  type ModuleSetupDecision,
-  type ModuleSetupStepResult,
-} from "./moduleSetup";
 
 export interface McppCliControllerOptions {
   output: vscode.OutputChannel;
@@ -52,6 +45,11 @@ interface ToolchainPickItem extends vscode.QuickPickItem {
 }
 
 type OperationToken = object;
+
+export interface ProjectTaskRunOptions {
+  /** Set to false when the caller performs its own post-task action. */
+  notify?: boolean;
+}
 
 const INSTALL_CUSTOM_LABEL = "$(edit) 输入其他兼容工具链 spec…";
 const CONFIRM_INSTALL = "安装";
@@ -119,76 +117,13 @@ export class McppCliController {
     return this.operations.hasActive();
   }
 
-  public async runConfigureOnly(
-    project: McppProjectDiscovery,
-  ): Promise<ProcessResult | undefined> {
-    if (!this.options.isTrusted()) {
-      return undefined;
-    }
-
-    const token: OperationToken = {};
-    if (this.operations.beginProject(project.root, token) !== undefined) {
-      return undefined;
-    }
-
-    const executable = this.mcppExecutable(project);
-    const args = ["build", "--configure-only"];
-    try {
-      const result = await runConfigureOnlyProcess(project.root, executable);
-      this.appendShortCommand("刷新编译数据库", executable, args, result);
-      return result;
-    } finally {
-      // configure-only 与 build/run/test 共用项目锁，异常时也必须释放。
-      this.operations.finishProject(project.root, token);
-    }
-  }
-
-  public async runAutomaticModuleSetup(
-    plan: Extract<ModuleSetupDecision, { kind: "ready" }>,
-  ): Promise<ModuleSetupStepResult> {
-    const project = this.requireProject();
-    const commands = mcppModuleSetupCommands(plan);
-    const firstCommand = commands[0];
-    if (project === undefined || !this.requireTrusted() || firstCommand === undefined) {
-      return {
-        stage: firstCommand?.stage ?? "build",
-        state: "failed",
-        detail: "当前工作区无法执行自动模块配置。",
-      };
-    }
-
-    const token: OperationToken = {};
-    if (this.operations.beginGlobal(token) !== undefined) {
-      return {
-        stage: firstCommand.stage,
-        state: "failed",
-        detail: "已有 mcpp 操作正在运行。",
-      };
-    }
-
-    const executable = this.mcppExecutable(project);
-    try {
-      for (const command of commands) {
-        const result = await this.executeAutomaticModuleSetupCommand(
-          project,
-          executable,
-          command,
-        );
-        if (result.state !== "succeeded") {
-          return result;
-        }
-      }
-      return { stage: "build", state: "succeeded" };
-    } finally {
-      // 整个 install/default/build 事务共用一个 token，异常时也必须释放。
-      this.operations.finishGlobal(token);
-    }
-  }
-
-  public async runProjectTask(kind: ProjectTaskKind): Promise<void> {
+  public async runProjectTask(
+    kind: ProjectTaskKind,
+    options: ProjectTaskRunOptions = {},
+  ): Promise<TaskCompletion | undefined> {
     const project = this.requireProject();
     if (project === undefined || !this.requireTrusted()) {
-      return;
+      return undefined;
     }
 
     if (kind === "clean") {
@@ -198,7 +133,7 @@ export class McppCliController {
         CONFIRM_CLEAN,
       );
       if (choice !== CONFIRM_CLEAN) {
-        return;
+        return undefined;
       }
     }
 
@@ -212,7 +147,7 @@ export class McppCliController {
       if (choice === SHOW_TASKS) {
         await vscode.commands.executeCommand("workbench.action.tasks.showTasks");
       }
-      return;
+      return undefined;
     }
 
     let completion: TaskCompletion | undefined;
@@ -229,9 +164,12 @@ export class McppCliController {
       this.operations.finishProject(project.root, token);
     }
 
-    if (completion !== undefined && shouldReconcileAfterTask(kind, completion)) {
+    if (options.notify !== false
+      && completion !== undefined
+      && shouldRefreshLanguageServerAfterTask(kind, completion)) {
       await this.options.afterProjectTask(project, kind, completion);
     }
+    return completion;
   }
 
   public async showToolchains(): Promise<void> {
@@ -557,7 +495,7 @@ export class McppCliController {
       label: item.label,
       description: item.group === "project"
         ? "当前 mcpp 工程"
-        : item.group === "toolchain" ? "mcpp 工具链管理" : "clangd 与编译数据库",
+        : item.group === "toolchain" ? "mcpp 工具链管理" : "C++ Modules 语言服务",
       command: item.command,
     }));
     const picked = await vscode.window.showQuickPick(items, {
@@ -621,7 +559,7 @@ export class McppCliController {
     });
   }
 
-  private guarded(operation: () => Promise<void>): () => Promise<void> {
+  private guarded<T>(operation: () => Promise<T>): () => Promise<void> {
     return async () => {
       try {
         await operation();
@@ -632,7 +570,7 @@ export class McppCliController {
         } catch {
           // 输出频道可能已经在窗口重载时释放。
         }
-        void vscode.window.showErrorMessage(`mcpp：${message}`);
+        await vscode.window.showErrorMessage(`mcpp：${message}`);
       }
     };
   }
@@ -679,7 +617,7 @@ export class McppCliController {
     const result = await runProcess(executable, args, workingDirectory(project));
     this.appendShortCommand("查看工具链", executable, args, result);
     if (result.exitCode !== 0) {
-      void vscode.window.showErrorMessage(
+      await vscode.window.showErrorMessage(
         `mcpp toolchain list 失败（退出码 ${result.exitCode}）。请查看 mcpp 输出频道。`,
       );
       return undefined;
@@ -687,56 +625,12 @@ export class McppCliController {
 
     const inventory = parseToolchainList(`${result.stdout}${result.stderr.length > 0 ? `\n${result.stderr}` : ""}`);
     if (!inventory.recognized) {
-      void vscode.window.showErrorMessage(
+      await vscode.window.showErrorMessage(
         "无法识别当前 mcpp toolchain list 输出；原始输出已保留在 mcpp 输出频道，请检查 mcpp 版本。",
       );
       return undefined;
     }
     return inventory;
-  }
-
-  private async executeAutomaticModuleSetupCommand(
-    project: McppProjectDiscovery,
-    executable: string,
-    command: ModuleSetupCommand,
-  ): Promise<ModuleSetupStepResult> {
-    if (command.mode === "process") {
-      const result = await runProcess(executable, command.args, project.root);
-      this.appendShortCommand(`自动模块配置：${command.stage}`, executable, command.args, result);
-      return {
-        stage: command.stage,
-        state: result.exitCode === 0 ? "succeeded" : "failed",
-        exitCode: result.exitCode,
-      };
-    }
-
-    // build 直接复用任务执行器，避免在 global token 内再次申请 project token。
-    let completion: TaskCompletion;
-    try {
-      completion = await this.executeTask(
-        project.root,
-        executable,
-        "mcpp: 自动模块配置构建",
-        command.args,
-      );
-    } catch (error) {
-      return {
-        stage: command.stage,
-        state: "failed",
-        detail: error instanceof Error ? error.message : String(error),
-      };
-    }
-    this.appendTaskCompletion(
-      project.root,
-      "mcpp: 自动模块配置构建",
-      command.args,
-      completion,
-    );
-    return {
-      stage: command.stage,
-      state: completion.state,
-      exitCode: completion.exitCode,
-    };
   }
 
   private async executeTask(

@@ -56,7 +56,6 @@ export const SECTION_HEADERS: readonly SectionHeaderSpec[] = [
   { group: "toolchain", label: "[toolchain]", header: "[toolchain]", detail: "编译器工具链简写" },
   { group: "xlings", label: "[xlings]", header: "[xlings]", detail: "构建环境（xlings 供给）" },
   { group: "xlings.workspace", label: "[xlings.workspace]", header: "[xlings.workspace]", detail: "固定工具版本" },
-  { group: "xlings.envs", label: "[xlings.envs]", header: "[xlings.envs]", detail: "工具环境的环境变量" },
   { group: "target", label: "[target.<triple>]", header: "[target.${1:x86_64-linux-gnu}]", detail: "按目标三元组的配置" },
   { group: "pack", label: "[pack]", header: "[pack]", detail: "mcpp pack 打包配置" },
   { group: "pack.bundle-project", label: "[pack.bundle-project]", header: "[pack.bundle-project]", detail: "vendored 过滤策略微调" },
@@ -134,11 +133,7 @@ const CAPABILITY_TEMPLATES: readonly TemplateSpec[] = [
 ];
 
 const XLINGS_WORKSPACE_TEMPLATES: readonly TemplateSpec[] = [
-  { label: 'tool = "version"', detail: "固定工具版本", insertSnippet: '${1:clang} = "${2:20.1.7}"' },
-];
-
-const XLINGS_ENVS_TEMPLATES: readonly TemplateSpec[] = [
-  { label: 'NAME = "value"', detail: "应用到工具环境的环境变量", insertSnippet: '${1:NAME} = "${2:value}"' },
+  { label: 'tool = "version"', detail: "固定 xlings 工具版本", insertSnippet: '${1:node} = "${2:24.19.0}"' },
 ];
 
 const TOOLS_OVERRIDES_TEMPLATES: readonly TemplateSpec[] = [
@@ -154,7 +149,6 @@ const TEMPLATES_BY_GROUP: Record<string, readonly TemplateSpec[]> = {
   "generated_files": GENERATED_FILE_TEMPLATES,
   "capabilities": CAPABILITY_TEMPLATES,
   "xlings.workspace": XLINGS_WORKSPACE_TEMPLATES,
-  "xlings.envs": XLINGS_ENVS_TEMPLATES,
   "tools.overrides": TOOLS_OVERRIDES_TEMPLATES,
 };
 

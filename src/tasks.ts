@@ -27,11 +27,11 @@ export function projectTaskPlan(kind: ProjectTaskKind): ProjectTaskPlan {
   };
 }
 
-export function shouldReconcileAfterTask(
-  _kind: ProjectTaskKind,
+export function shouldRefreshLanguageServerAfterTask(
+  kind: ProjectTaskKind,
   completion?: TaskCompletion,
 ): boolean {
-  return completion?.state !== "cancelled";
+  return kind === "build" && completion !== undefined && completion.state !== "cancelled";
 }
 
 export function classifyTaskExit(exitCode: number | undefined): TaskCompletion {

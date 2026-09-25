@@ -5,7 +5,7 @@ import {
   McppOperationRegistry,
   classifyTaskExit,
   projectTaskPlan,
-  shouldReconcileAfterTask,
+  shouldRefreshLanguageServerAfterTask,
 } from "../src/tasks";
 
 test("基础项目任务使用固定的 mcpp 参数数组", () => {
@@ -31,16 +31,14 @@ test("基础项目任务使用固定的 mcpp 参数数组", () => {
   });
 });
 
-test("构建类项目任务结束后都需要重新协调 IDE", () => {
-  for (const kind of ["build", "run", "test", "clean"] as const) {
-    assert.equal(shouldReconcileAfterTask(kind), true);
+test("只有非取消的 build 任务刷新 C++ 模块语言服务", () => {
+  assert.equal(shouldRefreshLanguageServerAfterTask("build", { state: "succeeded", exitCode: 0 }), true);
+  assert.equal(shouldRefreshLanguageServerAfterTask("build", { state: "failed", exitCode: 2 }), true);
+  assert.equal(shouldRefreshLanguageServerAfterTask("build", { state: "cancelled" }), false);
+  assert.equal(shouldRefreshLanguageServerAfterTask("build"), false);
+  for (const kind of ["run", "test", "clean"] as const) {
+    assert.equal(shouldRefreshLanguageServerAfterTask(kind, { state: "succeeded", exitCode: 0 }), false);
   }
-});
-
-test("取消的项目任务不进入成功后的 IDE 重协调", () => {
-  assert.equal(shouldReconcileAfterTask("build", { state: "succeeded", exitCode: 0 }), true);
-  assert.equal(shouldReconcileAfterTask("build", { state: "failed", exitCode: 2 }), true);
-  assert.equal(shouldReconcileAfterTask("build", { state: "cancelled" }), false);
 });
 
 test("退出码区分成功、失败和取消", () => {

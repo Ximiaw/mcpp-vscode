@@ -5,10 +5,14 @@ import test from "node:test";
 
 interface PackageManifest {
   version?: string;
+  description?: string;
   icon?: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   repository?: { url?: string };
   homepage?: string;
   bugs?: { url?: string };
+  engines?: { vscode?: string };
   extensionDependencies?: string[];
   activationEvents?: string[];
   capabilities?: { untrustedWorkspaces?: { supported?: string; description?: string } };
@@ -24,16 +28,21 @@ interface PackageManifest {
 
 const root = path.resolve(process.cwd());
 
-test("declares the official clangd dependency and mcpp commands", () => {
+test("declares mcpp-language-server as the C++ modules language service", () => {
   const manifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as PackageManifest;
-  assert.equal(manifest.version, "0.3.1");
-  assert.ok(manifest.extensionDependencies?.includes("llvm-vs-code-extensions.vscode-clangd"));
+  assert.equal(manifest.version, "0.4.0");
+  assert.equal(manifest.description, "mcpp 工程构建、工具链与 C++ Modules 语言服务集成");
+  assert.equal(manifest.engines?.vscode, "^1.91.0");
+  assert.deepEqual(manifest.extensionDependencies, ["sunrisepeak.mcpp-language-server"]);
+  assert.ok(!manifest.extensionDependencies?.includes("llvm-vs-code-extensions.vscode-clangd"));
   assert.ok(manifest.activationEvents?.includes("workspaceContains:mcpp.toml"));
   assert.ok(manifest.activationEvents?.includes("onCommand:mcpp.run"));
+  assert.ok(manifest.activationEvents?.includes("onCommand:mcpp.configureLanguageServer"));
+  assert.ok(manifest.activationEvents?.includes("onCommand:mcpp.configureClangd")); // deprecated alias
   assert.equal(manifest.capabilities?.untrustedWorkspaces?.supported, "limited");
   assert.equal(
     manifest.capabilities?.untrustedWorkspaces?.description,
-    "未受信任工作区仅启用模块语法高亮与 mcpp.toml 结构补全（纯文本分析），不执行 CDB、mcpp 或 clangd 指定的任何程序，也不接管 clangd 配置。",
+    "未受信任工作区仅启用本扩展的模块语法高亮与 mcpp.toml 结构补全（纯文本分析），不执行 mcpp CLI 或接管语言服务配置。",
   );
   assert.deepEqual(
     manifest.contributes?.commands?.map((command) => command.command),
@@ -47,14 +56,19 @@ test("declares the official clangd dependency and mcpp commands", () => {
       "mcpp.showToolchains",
       "mcpp.installToolchain",
       "mcpp.selectDefaultToolchain",
+      "mcpp.configureLanguageServer",
       "mcpp.configureClangd",
       "mcpp.refreshCompilationDatabase",
       "mcpp.checkModuleSupport",
       "mcpp.autoConfigureModules",
+      "mcpp.showModuleGraph",
+      "mcpp.showLanguageServerLogs",
     ],
   );
   assert.ok(manifest.contributes?.configuration?.properties?.["mcpp.path"]);
-  assert.ok(manifest.contributes?.configuration?.properties?.["mcpp.modulesSupport"]);
+  assert.ok(manifest.contributes?.configuration?.properties?.["mcpp.tomlCompletion"]);
+  assert.equal(manifest.dependencies?.["vscode-languageclient"], undefined);
+  assert.equal(manifest.devDependencies?.["vscode-languageclient"], undefined);
   assert.deepEqual(manifest.contributes?.configurationDefaults?.["files.associations"], {
     "*.ccm": "cpp",
     "*.cppm": "cpp",
@@ -63,41 +77,27 @@ test("declares the official clangd dependency and mcpp commands", () => {
   });
 });
 
-test("自动模块配置使用非交互复合操作和单一全局锁", () => {
-  const source = readFileSync(path.join(root, "src/cliController.ts"), "utf8");
-  assert.match(source, /public async readToolchainInventory\s*\(/);
-  const start = source.indexOf("public async runAutomaticModuleSetup");
-  assert.notEqual(start, -1);
-  const end = source.indexOf("public async ", start + 10);
-  const method = source.slice(start, end === -1 ? source.length : end);
-  assert.match(method, /mcppModuleSetupCommands\(plan\)/);
-  assert.match(method, /beginGlobal\(token\)/);
-  assert.match(method, /finally\s*\{[\s\S]*finishGlobal\(token\)/);
-  assert.doesNotMatch(method, /pickInstallSpec|selectDefaultToolchainFromInventory|showQuickPick|showWarningMessage/);
-});
-
-test("一键向导只有一次确认并在构建后重载上下文", () => {
+test("一键向导只执行普通 build 并在之后刷新 C++ 模块语言服务", () => {
+  const controller = readFileSync(path.join(root, "src/cliController.ts"), "utf8");
   const source = readFileSync(path.join(root, "src/extension.ts"), "utf8");
   const start = source.indexOf("async function autoConfigureModulesWizard");
-  const end = source.indexOf("export async function activate", start);
+  const end = source.indexOf("const mcppTomlCompletionKinds", start);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   const wizard = source.slice(start, end);
   for (const expected of [
-    "readToolchainInventory",
     "buildModuleSetupPlan",
     "moduleSetupConfirmation",
-    "runAutomaticModuleSetup",
     "executeModuleSetup",
-    "loadProjectContext",
+    'runProjectTask("build", { notify: false })',
+    "refreshLanguageServerAfterBuild",
   ]) {
-    assert.match(wizard, new RegExp(expected));
+    assert.ok(wizard.includes(expected), `wizard missing ${expected}`);
   }
   assert.match(wizard, /modal:\s*true/);
-  assert.match(wizard, /let currentContext/);
   assert.doesNotMatch(wizard, /CLI_COMMANDS\.(installToolchain|selectDefaultToolchain)/);
-  assert.doesNotMatch(wizard, /刷新编译数据库|showQuickPick|showInputBox|maybeDisableCppTools/);
-  assert.doesNotMatch(wizard, /configureClangd\([^\n]*"interactive"/);
+  assert.doesNotMatch(wizard, /readToolchainInventory|runAutomaticModuleSetup|ensureClangd|loadProjectContext/);
+  assert.doesNotMatch(controller, /runAutomaticModuleSetup|executeAutomaticModuleSetupCommand/);
 });
 
 test("shows editor title buttons only inside mcpp projects", () => {
@@ -111,47 +111,6 @@ test("shows editor title buttons only inside mcpp projects", () => {
   assert.equal(commands.find((command) => command.command === "mcpp.run")?.icon, "$(play)");
   assert.equal(commands.find((command) => command.command === "mcpp.test")?.icon, "$(beaker)");
   assert.ok(!commands.some((command) => command.command === "mcpp.inProject"));
-});
-
-test("wires configure-only through the existing refresh command", () => {
-  const manifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as PackageManifest;
-  assert.ok(!manifest.activationEvents?.includes("onCommand:mcpp.configureIde"));
-  assert.ok(manifest.activationEvents?.includes("onCommand:mcpp.refreshCompilationDatabase"));
-
-  const source = readFileSync(path.join(root, "src/extension.ts"), "utf8");
-  assert.match(source, /ensureIdeConfigured/);
-  assert.match(source, /runConfigureOnly/);
-  assert.doesNotMatch(source, /runIdeConfigure|COMMAND_IDE_CONFIGURE|ide["'],\s*["']configure/);
-  assert.match(source, /findProjectForUri[\s\S]*findNearestMcppProject\(uri\.fsPath, workspaceFolder\.uri\.fsPath\)/);
-  assert.match(source, /requestManifestReconciliation\s*=\s*\(manifestUri:[^)]+\)[\s\S]*findProjectForUri\(manifestUri\)/);
-  assert.match(source, /requestManifestReconciliation[\s\S]*projectAffectedByManifest\([\s\S]*manifestUri\.fsPath/);
-  assert.match(source, /manifestWatcher\.onDidChange\(\(manifestUri\) => \{[\s\S]*requestManifestReconciliation\(manifestUri\)/);
-  assert.match(source, /manifestWatcher\.onDidDelete\(\(manifestUri\) => requestDeletedManifestReconciliation\(manifestUri\)\)/);
-  assert.match(source, /configurationAffectsMcppExecution[\s\S]*forceConfigureOnlyByProject\.add/);
-  assert.match(source, /reconcilePublishedCdbByRoot[\s\S]*reconcileProjectContext\(project, forceRestart, false, false\)/);
-  assert.match(source, /requestAutomaticReconciliation[\s\S]*reconcilePublishedCdbByRoot\(project\.root, forceRestart\)/);
-  assert.match(source, /forceConfigureOnlyByProject\.has\(projectRoot\)/);
-});
-
-test("configure-only shares the project operation lock", () => {
-  const source = readFileSync(path.join(root, "src/cliController.ts"), "utf8");
-  const start = source.indexOf("public async runConfigureOnly");
-  assert.notEqual(start, -1);
-  const end = source.indexOf("public async ", start + 10);
-  const method = source.slice(start, end === -1 ? source.length : end);
-  assert.match(method, /beginProject\(project\.root, token\)/);
-  assert.match(method, /runConfigureOnlyProcess/);
-  assert.match(method, /finally\s*\{[\s\S]*finishProject\(project\.root, token\)/);
-});
-
-test("IDE commands expose progress and bound clangd restart waits", () => {
-  const source = readFileSync(path.join(root, "src/extension.ts"), "utf8");
-  assert.match(source, /const CLANGD_RESTART_TIMEOUT_MS = 15_000/);
-  assert.match(source, /withTimeout\([\s\S]*CLANGD_RESTART_TIMEOUT_MS/);
-  for (const title of ["配置 clangd", "刷新编译数据库", "检查模块支持", "一键配置模块代码提示"]) {
-    assert.match(source, new RegExp(`showInteractiveIdeStart\\("${title}"\\)`));
-  }
-  assert.match(source, /output\.show\(true\)/);
 });
 
 test("ships syntax-only C++ highlighting for the exact build.mcpp filename", () => {
@@ -273,7 +232,7 @@ test("设置全局默认后先释放工具链锁再提供立即构建", () => {
   assert.ok(unlock >= 0 && unlock < immediateBuild);
 });
 
-test("项目任务结束后先释放项目锁再重新协调 IDE", () => {
+test("项目任务结束后先释放项目锁再刷新 C++ 模块语言服务", () => {
   const source = readFileSync(path.join(root, "src/cliController.ts"), "utf8");
   const start = source.indexOf("public async runProjectTask");
   const end = source.indexOf("public async showToolchains", start);
@@ -282,8 +241,8 @@ test("项目任务结束后先释放项目锁再重新协调 IDE", () => {
 
   const method = source.slice(start, end);
   const unlock = method.indexOf("this.operations.finishProject(project.root, token)");
-  const reconcile = method.indexOf("this.options.afterProjectTask(project, kind, completion)");
-  assert.ok(unlock >= 0 && unlock < reconcile);
+  const refresh = method.indexOf("this.options.afterProjectTask(project, kind, completion)");
+  assert.ok(unlock >= 0 && unlock < refresh);
 });
 
 test("安装流程把系统工具链和 target 兼容 spec 交给 mcpp 解析", () => {
@@ -350,11 +309,16 @@ test("声明 GitHub 仓库和扩展图标", () => {
   assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
 });
 
-test("README 区分 mcpp 的 MSVC 构建能力和 clangd 的 IFC 限制", () => {
+test("README 说明 mcpp 与 mcppls 的职责边界和升级限制", () => {
   const readme = readFileSync(path.join(root, "README.md"), "utf8");
-  assert.match(readme, /0\.0\.90 起 native `cl\.exe` 后端支持/);
-  assert.match(readme, /mcpp 可以正常构建它们，但 clangd\s+不能直接消费/);
-  assert.doesNotMatch(readme, /native MSVC\s+构建仍提示/);
+  assert.match(readme, /sunrisepeak\.mcpp-language-server/);
+  assert.match(readme, /不启动第二个\s+LSP 客户端/);
+  assert.match(readme, /不表示本扩展读取用户的 `clangd\.\*` 设置/);
+  assert.match(readme, /mcpp\.path.*只控制/s);
+  assert.match(readme, /darwin-x64/);
+  assert.match(readme, /不再读取或写入它们/);
+  assert.doesNotMatch(readme, /mcpp\.clangd\.path.*匹配 LLVM/);
+  assert.doesNotMatch(readme, /当前完整的模块语义能力只支持 LLVM/);
 });
 
 test("嵌套工程提示不猜测它一定是 mcpp 工作区成员", () => {

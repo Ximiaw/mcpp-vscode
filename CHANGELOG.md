@@ -15,6 +15,24 @@
   显式刷新会分别报告 CDB 生成与 clangd 协调结果。
 - 对齐 mcpp #387 的最终 workspace 契约：virtual workspace 根不作为单一 clangd 工程，
   扩展消费当前活动 member 根的 CDB；rooted workspace 仍按根 package 处理。
+## 0.4.0（未发布）
+
+### Changed
+
+- 将 C++ 模块语言服务依赖从官方 `llvm-vs-code-extensions.vscode-clangd` 切换为
+  `sunrisepeak.mcpp-language-server`（C++ Modules Language Server / mcppls）；VS Code 最低版本
+  提升到 1.91。
+- 删除本扩展中的 clangd 解析、匹配、配置、PCM 检查、CDB 监听和自动重启逻辑。mcpp-vscode
+  不再启动第二个 LSP 客户端，也不再打包语言服务 payload。
+- mcpp build 完成后只通过 mcppls 公开命令刷新语言服务；新增模块图、语言服务日志和分析
+  上下文转发命令。
+- 一键模块配置改为一次确认后执行 `mcpp build` 并刷新 mcppls，不再安装 llvm-tools、切换
+  LLVM 全局默认或修改 clangd 配置。
+
+### Fixed
+
+- 移除 mcpp 已删除的 `[xlings.envs]` manifest 补全，并将 `[xlings.workspace]` 示例版本更新为
+  当前索引可用的 Node 条目。
 
 ## 0.2.7
 
