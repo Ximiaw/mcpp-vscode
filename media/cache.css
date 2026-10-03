@@ -1,0 +1,570 @@
+/*
+ * The cache view's stylesheet (§8.1).
+ *
+ * Four rules hold this together, and all four come from the plan (§8.1, §3.5):
+ *
+ * 1. **Theme tokens only.** Every colour is a `var(--vscode-*)` reference, so the
+ *    view follows light, dark and high-contrast themes without a second
+ *    stylesheet. `currentColor` and `transparent` are the only other values, and
+ *    `transparent` is used as the *fallback* of a theme token that a theme may
+ *    not define. There is not a single literal colour value in this file.
+ * 2. **Never colour alone.** Each bar segment is also a labelled item in the
+ *    legend beneath it — caption and share, as text — so a theme that collapses
+ *    every hue into one still reads. Colour is decoration on top.
+ * 3. **No inline styles.** The document sets `data-*` attributes and this file
+ *    turns them into fill and border, so the strict CSP holds.
+ * 4. **One primary bar, and whitespace instead of borders.** §8.1 asks for a
+ *    6 px bar in the project block, a 14 px composition bar and a 6 px age bar,
+ *    the legend compressed into a single wrapped line separated by `·`, and
+ *    sections separated by space rather than by nested boxes. The only
+ *    hairline left is the one between table rows.
+ *
+ * `--vscode-mcpp-cacheOkForeground` and `--vscode-mcpp-cacheStaleForeground`
+ * are the two colour ids this extension contributes; the plan's chart tokens
+ * are the fallbacks, so an older rendering host still gets a sensible hue.
+ *
+ * Sizes are the plan's own scale (26 / 12 / 11 px) rather than
+ * `var(--vscode-font-size)`: the sidebar has to stay compact at 170–520 px, and
+ * the review is by eye against §8.1. Nothing here depends on a colour, so a
+ * theme change cannot make a control unusable.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  line-height: 1.45;
+  /* Tabular figures: the summary, the metric and the table line up by digit. */
+  font-variant-numeric: tabular-nums;
+  /* A long cache path or package label wraps instead of widening the sidebar. */
+  overflow-wrap: anywhere;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* The view title is the real heading; this is its accessible twin. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+main {
+  padding: 8px 10px 14px;
+}
+
+/* ----------------------------------------------------------------- blocks */
+
+.block {
+  margin: 0 0 14px;
+}
+
+.block-heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.block-summary,
+.viz-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.block-summary::-webkit-details-marker,
+.viz-summary::-webkit-details-marker {
+  display: none;
+}
+
+.block-summary::before,
+.viz-summary::before {
+  content: "▸";
+  color: var(--vscode-icon-foreground, currentColor);
+}
+
+details[open] > .block-summary::before,
+details[open] > .viz-summary::before {
+  content: "▾";
+}
+
+.block-summary:focus-visible,
+.viz-summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.summary-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.summary-value {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.block-body {
+  padding-top: 8px;
+}
+
+/* ----------------------------------------------------------------- figures */
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin: 4px 0 0;
+}
+
+.metric-value {
+  font-size: 26px;
+  line-height: 1.1;
+  font-weight: 600;
+  /* The figure is bounded to four characters by `formatBytes`, so keeping it on
+     one line cannot overflow a 170 px sidebar. */
+  white-space: nowrap;
+}
+
+.metric-unit {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+
+.metric-sub,
+.metric-note,
+.viz-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------------- viz */
+
+.viz {
+  margin: 12px 0 0;
+}
+
+.viz-heading {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+
+.viz-details > .viz-summary {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* -------------------------------------------------------------------- bars */
+
+.viz-bar {
+  display: block;
+  width: 100%;
+  height: 14px;
+  background-color: var(--vscode-input-background);
+}
+
+/* §8.1: exactly one 6 px bar in the project block and one for the age spread. */
+.viz-bar-thin {
+  height: 6px;
+}
+
+.project-bar {
+  margin-top: 8px;
+}
+
+/* The outline is what keeps a segment visible in a high-contrast theme, where
+   `--vscode-contrastBorder` exists; everywhere else it stays transparent, so the
+   bars are separated by the track rather than by a heavy border. */
+.viz-bar rect {
+  stroke: var(--vscode-contrastBorder, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/*
+ * `fill` is set on the **group**, never on the `<rect>`.
+ *
+ * The renderer stamps `data-kind` / `data-segment` / `data-bucket` on the `<g>`
+ * that wraps each segment, and SVG inherits `fill` from the group down into the
+ * rectangle. A rule written as `rect[data-kind]` therefore matches nothing —
+ * the attribute lives one level up — and every bar falls back to the SVG
+ * default fill, which is *black in every theme*. That is what shipped: the
+ * legend swatches were coloured, the bars were solid black, and the data was
+ * plainly there. `test/views/cachePanelHtml.test.ts` now checks the document and
+ * this stylesheet against each other so it cannot happen again.
+ */
+[data-viz="composition"] g[data-kind] {
+  fill: var(--vscode-charts-blue, currentColor);
+}
+
+[data-viz="composition"] g[data-kind="pkg"] {
+  fill: var(--vscode-mcpp-cacheOkForeground, var(--vscode-charts-green, currentColor));
+}
+
+[data-viz="composition"] g[data-kind="std"] {
+  fill: var(--vscode-charts-purple, currentColor);
+}
+
+[data-viz="composition"] g[data-kind="unknown"] {
+  fill: var(--vscode-descriptionForeground, currentColor);
+}
+
+[data-viz="composition"] g[data-segment="legacy"],
+.project-bar g[data-segment="stale"] {
+  fill: var(--vscode-mcpp-cacheStaleForeground, var(--vscode-charts-yellow, currentColor));
+}
+
+.project-bar g[data-segment="current"] {
+  fill: var(--vscode-mcpp-cacheOkForeground, var(--vscode-charts-green, currentColor));
+}
+
+/*
+ * The age bar is a **ramp**, not one colour per group.
+ *
+ * Every bucket used to be painted `mcpp.cacheOkForeground` except the overflow
+ * one, so four segments of 8% / 85% / 6% / 1% read as a single green block and
+ * the chart added nothing to the legend beneath it. The renderer now stamps
+ * `data-age-step` (0 = newest … 3 = oldest, `ageRampStep()` in
+ * `src/views/cachePanelHtml.ts`) and the four stops are cold → hot. The four
+ * `charts.*` tokens below are solid in every theme, unlike `charts.orange`,
+ * which resolves to a find-match highlight at 33% alpha.
+ */
+[data-viz="age"] g[data-age-step="0"],
+.swatch[data-age-step="0"] {
+  fill: var(--vscode-charts-blue, currentColor);
+  background-color: var(--vscode-charts-blue, currentColor);
+}
+
+[data-viz="age"] g[data-age-step="1"],
+.swatch[data-age-step="1"] {
+  fill: var(--vscode-charts-green, currentColor);
+  background-color: var(--vscode-charts-green, currentColor);
+}
+
+[data-viz="age"] g[data-age-step="2"],
+.swatch[data-age-step="2"] {
+  fill: var(--vscode-charts-yellow, currentColor);
+  background-color: var(--vscode-charts-yellow, currentColor);
+}
+
+[data-viz="age"] g[data-age-step="3"],
+.swatch[data-age-step="3"] {
+  fill: var(--vscode-charts-red, currentColor);
+  background-color: var(--vscode-charts-red, currentColor);
+}
+
+/* ------------------------------------------------------------------ legend */
+
+/* §8.1: the legend is one wrapped line separated by `·`, not one row per item. */
+.legend {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend-inline {
+  display: block;
+  font-size: 11px;
+}
+
+.legend-inline .legend-item {
+  display: inline;
+  /* No `nowrap`: a long translated caption has to wrap rather than widen the
+     sidebar. Items are short enough that they only break at 200 px. */
+}
+
+.legend-inline .legend-item + .legend-item::before {
+  content: " · ";
+  color: var(--vscode-descriptionForeground);
+}
+
+.legend-label {
+  margin-right: 4px;
+}
+
+.legend-value {
+  color: var(--vscode-descriptionForeground);
+}
+
+.swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  vertical-align: middle;
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  background-color: var(--vscode-charts-blue, currentColor);
+}
+
+/* The age swatches are painted by `data-age-step` above; `data-bucket` only
+   survives as the marker for the overflow bucket, so it must not colour here. */
+.swatch[data-kind="pkg"],
+.swatch[data-segment="current"] {
+  background-color: var(--vscode-mcpp-cacheOkForeground, var(--vscode-charts-green, currentColor));
+}
+
+.swatch[data-kind="std"] {
+  background-color: var(--vscode-charts-purple, currentColor);
+}
+
+.swatch[data-kind="unknown"] {
+  background-color: var(--vscode-descriptionForeground, currentColor);
+}
+
+.swatch[data-kind="legacy"],
+.swatch[data-segment="stale"] {
+  background-color: var(--vscode-mcpp-cacheStaleForeground, var(--vscode-charts-yellow, currentColor));
+}
+
+/* ------------------------------------------------------------- top packages */
+
+.top-table {
+  width: 100%;
+  margin-top: 4px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.top-table th,
+.top-table td {
+  padding: 2px 4px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.top-table th {
+  color: var(--vscode-descriptionForeground);
+  font-weight: 600;
+}
+
+.top-table tbody tr + tr td {
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.top-table th:nth-child(1) {
+  width: 40%;
+}
+
+.top-table th:nth-child(2) {
+  width: 14%;
+}
+
+.top-table th:nth-child(3) {
+  width: 18%;
+}
+
+.top-table th:nth-child(4) {
+  width: 28%;
+}
+
+.top-table time,
+.top-table .unknown {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* A package label is itself the drill-down button. */
+.link {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--vscode-textLink-foreground);
+  background-color: transparent;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* `:not([disabled])` so this keeps beating the generic `button:hover` rule. */
+.link:hover:not([disabled]) {
+  text-decoration: underline;
+  background-color: transparent;
+}
+
+/* ----------------------------------------------------------------- controls */
+
+button,
+input {
+  font-family: inherit;
+  font-size: inherit;
+  border-radius: 2px;
+  padding: 3px 8px;
+}
+
+button {
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+  border: 1px solid var(--vscode-button-border, transparent);
+  cursor: pointer;
+}
+
+button:hover:not([disabled]) {
+  background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+input {
+  color: var(--vscode-input-foreground);
+  background-color: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, transparent));
+}
+
+button[disabled],
+input[disabled] {
+  /* Dashed plus dimmed: "closed" is visible without relying on colour. */
+  border-style: dashed;
+  opacity: 0.7;
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+}
+
+.budget {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.budget input {
+  width: 5em;
+  min-width: 3em;
+  max-width: 100%;
+}
+
+.budget-unit,
+.budget-estimate {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.budget-estimate {
+  flex-basis: 100%;
+}
+
+/* ---------------------------------------------------------------- messages */
+
+.warnings {
+  margin: 0 0 10px;
+}
+
+.warning {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, transparent);
+  background-color: var(--vscode-inputValidation-warningBackground, transparent);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.marker {
+  color: var(--vscode-editorWarning-foreground, currentColor);
+  font-weight: 600;
+}
+
+.empty {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px dashed var(--vscode-panel-border, transparent);
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.boundary {
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
+}
+
+/* -------------------------------------------------------------- narrow view */
+
+/*
+ * The sidebar is 170–520 px. At 200 px nothing may overflow sideways: the
+ * buttons and the budget group already wrap, the legend already wraps between
+ * items, the metric keeps its 26 px figure on one line, and the table stops
+ * being a table — each cell is prefixed with the column name it carries in
+ * `data-head`, so no figure is lost and no column is clipped.
+ */
+@media (max-width: 360px) {
+  main {
+    padding: 6px 8px 12px;
+  }
+
+  .actions {
+    gap: 5px;
+  }
+}
+
+@media (max-width: 260px) {
+  .top-table thead {
+    display: none;
+  }
+
+  .top-table,
+  .top-table tbody,
+  .top-table tr,
+  .top-table td {
+    display: block;
+    width: auto;
+  }
+
+  .top-table tr + tr {
+    border-top: 1px solid var(--vscode-panel-border, transparent);
+  }
+
+  .top-table td {
+    padding: 0;
+    border: 0;
+  }
+
+  .top-table td[data-head]::before {
+    content: attr(data-head) " ";
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .top-table .cell-label {
+    font-weight: 600;
+  }
+}

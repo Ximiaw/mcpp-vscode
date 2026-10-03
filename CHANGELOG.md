@@ -1,4 +1,209 @@
-# 更新日志
+## 0.6.0 - 2026-10-02
+
+The sidebar was reorganised around one rule: **the body shows state, the actions sit
+next to it, and the two are visually separate.**
+
+### Changed
+
+- **Three views instead of four**: 工程 / mcpp 库生态 / 缓存. The C++ Modules view is
+  gone as a view; its state is now one row inside 工程 → 基本信息, collapsed by
+  default. **The collapsed row always carries a status icon**, so a degraded language
+  service is visible without expanding it.
+- **The project view** is two labelled sections: 基本信息 (identity, target, toolchain,
+  dependencies, the language service) — collapsed by default — and 常用命令, which opens
+  with the nine things you can do, creation first (`new project`, then build/run/test/
+  clean/toolchain/search-and-add/self-check/settings). Rows carry a keybinding hint where
+  one exists, and their icons are coloured by what they act on (blue builds or adds, green
+  runs or verifies, purple tests, red deletes, yellow manages the toolchain).
+- **Dependencies are shown as two levels**: what `mcpp.toml` declares, and the version
+  `mcpp.lock` resolved for it. No connector lines — `mcpp.lock` has no parent/child
+  edges, and drawing them would be inventing a tree.
+- **The cache view is a sidebar webview**, not an editor tab, and it starts **collapsed**
+  so the library list gets the height. 项目缓存 is always visible inside it; 全局缓存 is
+  collapsed and shows its summary on one line. The composition and age bars are drawn once,
+  with a single-line legend, and the age bar is a four-stop ramp (blue → green → yellow →
+  red) so four buckets do not read as one block.
+- **The mcpp status bar menu** groups its commands under one heading per area (project /
+  library / toolchain / cache / C++ Modules / settings) with a codicon per command, and it
+  carries the C++ Modules actions that used to be reachable only from the removed view —
+  including **capture the logs** (`mcppls.exportDiagnosticBundle`) and the two places the
+  logs and the last bundle live.
+- **`mcpp.views.enabled` hides the mcpp views' contents.** It does *not* remove the
+  activity bar icon: VS Code only hides a container that a built-in registered with
+  `hideIfEmpty`, and an extension cannot mark its own container that way. Right-click the
+  icon to remove it from the activity bar.
+- `package.json`'s marketplace icon is still mcpp's official logo — the same file the C++
+  Modules extension uses. The **activity bar** icon is a derived monochrome stencil of that
+  logo's wordmark, because VS Code paints a container icon as an alpha mask in the theme's
+  foreground colour (the badge would have been a solid block).
+
+### Added
+
+- **mcpp 库生态** — browse the package index already on this machine, offline: search
+  (a row's haystack carries its namespace, so typing `compat` filters to that namespace),
+  the `已添加` state on the row itself, and a per-package detail page in the editor with the
+  real **example code** the index's CI builds and runs (172 example projects), the version
+  matrix per platform, licence and repository. The page opens with what it is for: one row
+  of buttons — **Add to mcpp.toml** / **Switch to &lt;version&gt;** / Open the repository /
+  Open on the index site — and a clickable version matrix that aims that command. For a
+  package the workspace already depends on it reads `mcpp.toml` (then `mcpp.lock`), marks
+  the version in hand, and offers the switch instead of a blind add. `mcpp add` is still the
+  only thing that writes `mcpp.toml`.
+- Searching the *other* registries is a separate switch, `mcpp.library.networkSearch`,
+  **off by default**: that tier runs `mcpp search`, which may use the network and can
+  only be read from human output on a best-effort basis.
+- Labels use the official index site's own vocabulary — `import` / `#include` / `tool`
+  / 上游 mcpp.toml — read from `mcpp xpkg parse --json`, so the editor and the site say
+  the same thing.
+
+### Fixed during acceptance testing
+
+Every one of these was found by running the extension in a real profile, and each was
+traced to its cause rather than to its symptom.
+
+- **The library view reloaded itself forever** (flicker, rows that could not be clicked, a
+  pegged CPU). The document announced its own load with a `ready` message and the host
+  answered it with a repaint; assigning `webview.html` reloads the document, and every
+  render minted a fresh CSP nonce, so no two documents ever matched. The handshake is gone,
+  the nonce is per view, and an identical document is never pushed. The same dead `ready`
+  shape was removed from the detail page, and both the reload rule and the missing
+  `registerWebviewViewProvider` now have tests.
+- **Every cache bar was solid black.** The stylesheet selected `rect[data-kind=…]`, but the
+  renderer stamps those attributes on the `<g>` that wraps the rectangle, so no rule matched
+  and every segment took the SVG default fill. `fill` is now set on the group (which the
+  rectangle inherits), and a test compares the document against the stylesheet.
+- **The activity bar icon was a white block.** VS Code draws a container icon as an alpha
+  mask, and the official logo is an opaque badge: as a stencil it is a filled square. The
+  icon is now a derived, transparent-background wordmark, regenerated from `logo.png` by
+  `tools/generate-activitybar-icon.mjs`, with `npm run check:icon` as the drift gate.
+- **Quick menu rows had no icons, then no colour.** Icons needed a table and a rendering
+  path; colour cannot come from a `ThemeIcon` at all (VS Code 1.132 drops its colour in a
+  quick pick), so the rows ship generated coloured SVG assets — one per icon and palette
+  word, light and dark — built from `@vscode/codicons` by
+  `tools/generate-quick-menu-icons.mjs`. The project tree's `charts.orange` turned out to be
+  33%-alpha, and was replaced by `charts.red` for destructive rows.
+- **`mcpp.languageServer.exportDiagnosticBundle` was nearly registered twice** (once through
+  the table, once by hand after a change), which makes `activate()` throw and the whole
+  extension fail to start. A source gate now rejects a command id registered twice, and the
+  gate was verified by reintroducing the bug.
+- **A detail-page link click said nothing.** `void vscode.env.openExternal(…)` dropped the
+  boolean that says whether the browser opened, so a failure was indistinguishable from a
+  dead button. The click now writes a `pending` line immediately, and the host answers with
+  either the result, or the URL on the clipboard plus a note in the output channel.
+
+### Security & platform (found in external review)
+
+- **The workspace-trust boundary is closed again.** Three mcpp calls the new library
+  views had added (`xpkg parse` on the detail page, `mcpp search` behind the
+  cross-registry switch, the self-check's protocol probe) ran without checking trust,
+  and `mcpp.path` is a `resource`-scoped setting — so a repository could name any
+  program and have it run in a workspace the user had explicitly marked untrusted.
+  `mcpp.path` and `mcpp.clangd.path` are now `restrictedConfigurations`, every
+  non-controller call goes through a trust-gated seam (`runMcpp`), and an
+  architecture test keeps new call sites from bypassing it. Untrusted workspaces
+  degrade in place: the detail page falls back to the descriptor's own text, the
+  search keeps its local results, the self-check says it did not probe.
+- **Windows: arguments are quoted on the `.cmd`/`.bat` path.** Node joins shell
+  arguments without quoting, so an index path containing a space split in two and a
+  search term like `foo & calc` became two commands. Arguments now follow the
+  `CommandLineToArgvW` quoting rules.
+- **One render seam for all four webviews** (`WebviewDocument`): a per-view CSP nonce
+  and an assign-only-on-change rule, with gates holding every host to it. The cache
+  view was the real winner: a refresh that changes nothing no longer reloads the
+  page, so the budget input and the scroll position survive.
+- **The release pipeline publishes to two markets.** A version tag tests, packages one
+  VSIX, publishes it to GitHub Releases and Open VSX (required), and to the
+  Visual Studio Marketplace when its token is configured (skipped with a notice
+  otherwise) — always the same artifact the Release carries.
+
+> From 0.5.0 on, entries are written in English. Earlier entries remain as they
+> were written.
+
+## 0.5.0 - 2026-10-02
+
+A groundwork release: the extension now says what it is doing, in the user's
+language, and every claim about mcpp or the C++ Modules extension is checked by a
+test or a generated snapshot rather than by a comment.
+
+### Added
+
+- **Three views** under a new `mcpp` Activity Bar container: **Project** (identity,
+  toolchain, targets and the build/run/test buttons), **Cache** (project artifacts
+  and the shared build cache, with its size, age distribution, largest packages
+  and incomplete entries) and **C++ Modules** (the language service's state,
+  issues and every action, forwarded to `sunrisepeak.mcpp-language-server`).
+- **A settings panel** (`mcpp: Open Settings Panel`) built from a single registry:
+  search, "only modified", per-section collapse, four presets, each row showing
+  where its value comes from, when it takes effect, and a link to the native
+  Settings editor.
+- **64 settings**, 29 of them public and the rest behind "show advanced". A new
+  `data/config-registry.json` is the single source of truth; `package.json` and
+  `docs/settings.md` are held to it by CI.
+- **Cache cleanup as a table of plans**, with five levels of confirmation: reading
+  is free, `mcpp clean` asks once, `--stale`/`gc`/`prune` show a preview first,
+  `mcpp cache clean --all` additionally requires an explicit acknowledgement naming
+  every project on the machine, and emptying the shared cache during a project
+  clean is a separate, unticked choice.
+- **`mcpp: Environment Self-check`**: one copyable snapshot of every version, the
+  mcpp protocol and advertised kinds, each C++ Modules capability and its fate,
+  the cache figures and every setting changed from its default.
+- **`build.mcpp` intelligence** without a language server: completion and hover for
+  the 31 build directives and the five action roles, snippets, document symbols and
+  seven static SPEC-007 diagnostics, generated from mcpp's own directive table.
+  `import std;` and `import mcpp;` are recognised and never reported as missing —
+  measured behaviour, see `docs/build-script.md`.
+- **`mcpp.toml` editing**: key completion, enum values, hover with the type, default,
+  plane and legacy advice, seven manifest diagnostics and navigation for
+  `workspace = true`, `path = …` and `features = […]`.
+- **English and Chinese**: every command title, setting and runtime message follows
+  the editor's language. `mcpp.ui.language` can override the runtime messages and
+  our panels; the Command Palette and the Settings UI always follow VS Code.
+
+### Changed
+
+- User-visible strings in `package.json` are now `%nls%` references; the text lives
+  in `package.nls.json` and `package.nls.zh-cn.json`.
+- Activation is narrower: the `onCommand:*` events are gone (VS Code derives them
+  from `contributes.commands` since 1.74), as is `onLanguage:cpp`.
+- `mcpp template`-free: `mcpp: Clean` is now `mcpp: Clean Project Artifacts`, and
+  the language-service commands moved under the `mcpp.languageServer.*` namespace.
+
+### Fixed
+
+- The toolchain inventory is read from `mcpp toolchain list --format json` when mcpp
+  speaks the machine-output protocol, instead of scraping the human table — the
+  human table no longer prints the line the old parser depended on.
+- A failing C++ Modules call can no longer be mistaken for a failing mcpp build, and
+  a command that a newer or older mcppls does not offer is remembered and hidden
+  rather than retried on every click.
+
+### Removed
+
+- `src/configureOnly.ts` and `src/ideWorkflow.ts`: dead since 0.4.0 moved the build
+  database to the language service, and at odds with the documented boundary.
+
+### Migration
+
+Nothing has to be changed by hand: every 0.4.x command id and setting key below still
+works, a keybinding that names an old id keeps firing, and the old setting key is read
+as an alias. A one-time prompt offers to move renamed setting values to their new
+names (dismiss it and it comes back next session; the old key is never deleted without
+your say-so).
+
+| 0.4.x | Now |
+| --- | --- |
+| `mcpp.tomlCompletion` (setting) | `mcpp.toml.completion` |
+| `mcpp.configureLanguageServer` | `mcpp.languageServer.selectContext` |
+| `mcpp.configureClangd` | `mcpp.languageServer.selectContext` |
+| `mcpp.refreshCompilationDatabase` | runs `mcpp build` (which refreshes the database) |
+| `mcpp.checkModuleSupport` | `mcpp.languageServer.restartServer` |
+| `mcpp.showModuleGraph` | `mcpp.languageServer.showModuleGraph` |
+| `mcpp.showLanguageServerLogs` | `mcpp.languageServer.showLogs` |
+| `mcpp.clean` | alias of `mcpp.cleanProjectArtifacts` |
+
+Removed outright in 0.6.0: `mcpp.showCachePanel` (the cache view is now in the sidebar
+— `mcpp.cache.focus` brings it up) and the standalone C++ Modules view (its state and
+actions live in 工程 → 基本信息 and the status bar menu).
 
 ## 0.3.1 - 2026-08-11
 

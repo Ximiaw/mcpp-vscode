@@ -1,0 +1,632 @@
+/*
+ * The library sidebar's stylesheet (§9.3, §10.2, §12).
+ *
+ * The rules the other webviews are held to apply here too:
+ *
+ * 1. **Theme tokens only.** Every colour is a `var(--vscode-*)` reference, so
+ *    light, dark and high-contrast themes all work from one file. The only other
+ *    values are `currentColor` and `transparent`, and `transparent` is always a
+ *    fallback of a token a theme may not define. There is no literal colour in
+ *    this file.
+ * 2. **Never colour alone.** The "already declared" state is a labelled badge
+ *    (`<span class="badge badge-added">`) and a `data-added` attribute; the
+ *    surface, the badges and the version are all text. Colour is decoration.
+ * 3. **No inline styles.** The document sets `data-*` attributes and this file
+ *    turns them into borders and fills, so the strict CSP holds.
+ * 4. **Built for 170–520 px.** Two-line clamped descriptions, the search box
+ *    row, `tabular-nums` so versions line up, and no fixed widths.
+ *
+ * The `.detail-*` rules at the end belong to the editor-area detail page
+ * (`src/library/detailHtml.ts`), which shares this stylesheet so the two halves
+ * of the library feature cannot drift apart visually.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+main {
+  padding: 4px 0 12px;
+}
+
+/* ───────────────────────────────────────────────────────────── header ── */
+
+.panel-header {
+  padding: 8px 10px 0;
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.count {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ──────────────────────────────────────────────────────────── toolbar ── */
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  background-color: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+}
+
+.search {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  color: var(--vscode-input-foreground);
+  background-color: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+}
+
+.search::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+}
+
+.search:focus-visible,
+.row:focus-visible,
+.link-button:focus-visible,
+.network-toggle input:focus-visible,
+.detail-actions button:focus-visible,
+.detail-toggle input:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.network-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+}
+
+.network-toggle input {
+  margin: 0;
+  accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
+}
+
+/* ─────────────────────────────────────────────────────────────── rows ── */
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row-item + .row-item {
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+}
+
+.row {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.row:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.row-name {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-version {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.row-surface {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/*
+ * A badge is *metadata*, not a control: no box, no fill, no outline — a quiet
+ * label separated from its neighbours by `·`. The outline was the whole problem:
+ * a bounded rectangle in a sidebar reads as something you can press.
+ *
+ * The two states that must not be missed (`Added`, `Descriptor not readable`)
+ * keep their colour and gain weight, so they still stand out without a border —
+ * and the text beside them says the same thing, which is the house rule.
+ */
+.badge {
+  padding: 0;
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  border: 0;
+  white-space: nowrap;
+}
+
+.badge + .badge::before,
+.row-surface + .badge::before {
+  content: "·";
+  margin-right: 4px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.badge-added {
+  color: var(--vscode-charts-green, var(--vscode-foreground));
+  font-weight: 600;
+}
+
+.badge-warn {
+  color: var(--vscode-charts-yellow, var(--vscode-foreground));
+  font-weight: 600;
+}
+
+/* Two lines, then an ellipsis: the row stays self-sufficient without a wall of text. */
+.row-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.empty {
+  margin: 12px 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+/* ────────────────────────────────────────────────────────────── footer ── */
+
+.footer {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 14px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+}
+
+.source {
+  flex: 1 1 auto;
+}
+
+.link-button {
+  flex: 0 0 auto;
+  padding: 0;
+  font: inherit;
+  color: var(--vscode-textLink-foreground);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+}
+
+/* ─────────────────────────────────────────── the detail page (editor) ── */
+
+body.detail {
+  background-color: var(--vscode-editor-background);
+  max-width: 900px;
+  padding: 0 20px 40px;
+}
+
+.detail-header {
+  padding: 16px 0 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.detail-title {
+  margin: 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.detail-description {
+  margin: 6px 0 0;
+  color: var(--vscode-descriptionForeground);
+}
+
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.detail-meta a {
+  color: var(--vscode-textLink-foreground);
+}
+
+/*
+ * The detail page is a *document*, so its sections are separated by a hairline
+ * and a heading that reads as a heading rather than as a micro-label: the
+ * uppercase/letterspaced 12 px version made four sections look like four
+ * toolbars. The page opens with the thing it is for (`detail-primary`), then
+ * the facts, then the prose.
+ */
+.detail-section {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.detail-section > h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.detail-primary {
+  margin-top: 14px;
+}
+
+.detail-primary .detail-actions {
+  margin-top: 0;
+}
+
+/* The version matrix is the page's selector: one row per platform, one button
+   per version, the aim of the command shown at the top of the page. */
+.detail-versions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+}
+
+.detail-version-group {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 3px 0;
+}
+
+.detail-version-group + .detail-version-group {
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.detail-version-group[data-current] .detail-platform {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.detail-platform {
+  flex: 0 0 auto;
+  min-width: 7em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.detail-version-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.detail-version {
+  padding: 1px 7px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  background-color: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.detail-version:hover {
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-toolbar-hoverBackground, transparent);
+}
+
+/* The version the project already asks for, marked by a word as well as a hue. */
+.detail-installed {
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--vscode-charts-green, var(--vscode-foreground));
+}
+
+.detail-version[data-selected] {
+  color: var(--vscode-inputOption-activeForeground, var(--vscode-foreground));
+  background-color: var(--vscode-inputOption-activeBackground, var(--vscode-toolbar-hoverBackground, transparent));
+  outline: 1px solid var(--vscode-inputOption-activeBorder, transparent);
+  outline-offset: -1px;
+  font-weight: 600;
+}
+
+.detail-version-empty {
+  color: var(--vscode-descriptionForeground);
+}
+
+.detail-current {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.detail-hint {
+  margin: 4px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.detail-deps,
+.detail-licenses {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+}
+
+.detail-code {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  background-color: var(--vscode-textCodeBlock-background, transparent);
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 3px;
+}
+
+.detail-code + .detail-current {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.detail-hint {
+  margin-top: 4px;
+}
+
+.detail-code-file {
+  margin-top: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+}
+
+pre.detail-code code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.tok-comment {
+  color: var(--vscode-editorCodeLens-foreground, var(--vscode-descriptionForeground));
+  font-style: italic;
+}
+
+.tok-string {
+  color: var(--vscode-charts-orange, currentColor);
+}
+
+.tok-keyword {
+  color: var(--vscode-charts-blue, var(--vscode-symbolIcon-keywordForeground, currentColor));
+}
+
+.tok-preprocessor {
+  color: var(--vscode-charts-purple, var(--vscode-symbolIcon-keywordForeground, currentColor));
+}
+
+.tok-punctuation {
+  color: var(--vscode-symbolIcon-operatorForeground, currentColor);
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.detail-actions button {
+  padding: 4px 12px;
+  font: inherit;
+  color: var(--vscode-button-foreground);
+  background-color: var(--vscode-button-background);
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.detail-actions button:hover {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+.detail-actions button[data-secondary] {
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background-color: var(--vscode-button-secondaryBackground, transparent);
+}
+
+/* "Already added" is success, not a call to action: the theme's pass colour,
+   thinned until it reads inert — disabled stays disabled, the hue tells the
+   reader the outcome is the good one (§22.5). */
+.detail-actions button.detail-add[data-installed],
+.detail-actions button.detail-add[data-installed]:hover {
+  color: var(--vscode-button-foreground);
+  background-color: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, var(--vscode-button-background)) 55%,
+    transparent
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, var(--vscode-contrastBorder, transparent)) 70%,
+    transparent
+  );
+}
+
+.detail-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+}
+
+/* The command and each usage line are text a reader copies elsewhere, so they
+   read as code blocks — the same recipe the example snippets use — with the
+   copy affordance riding beside them (§22.5). */
+.detail-command-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.detail-command {
+  flex: 1;
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  background-color: var(--vscode-textCodeBlock-background, transparent);
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  white-space: pre;
+  color: var(--vscode-editorForeground, var(--vscode-foreground));
+}
+
+/* The small affordance beside the command and each usage line: text a reader
+   pastes elsewhere, so a click takes it to the clipboard. */
+.detail-copy {
+  flex: none;
+  align-self: center;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background-color: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.detail-copy:hover {
+  background-color: var(--vscode-button-hoverBackground, transparent);
+}
+
+.detail-usage-line {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.detail-usage-line code {
+  flex: 1;
+  display: block;
+  padding: 6px 10px;
+  overflow-x: auto;
+  background-color: var(--vscode-textCodeBlock-background, transparent);
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  white-space: pre;
+  color: var(--vscode-editorForeground, var(--vscode-foreground));
+}
+
+.detail-result {
+  margin: 6px 0 0;
+  font-size: 11px;
+}
+
+.detail-result[data-state="error"] {
+  color: var(--vscode-errorForeground);
+}
+
+/* The client's own line while the host is being asked, so a click is never silent. */
+.detail-result[data-state="pending"] {
+  color: var(--vscode-descriptionForeground);
+}
+
+.detail-footer {
+  margin-top: 22px;
+  padding-top: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+}

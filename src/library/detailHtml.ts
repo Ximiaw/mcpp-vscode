@@ -1,0 +1,713 @@
+/**
+ * The package detail page's document, as a pure function (plan §12.1–§12.5).
+ *
+ * The sidebar answers "which package"; this page answers "what is it, how do I
+ * consume it, and how do I add it". It opens in the **editor area** (a
+ * `WebviewPanel`, see `src/library/detailPanel.ts`), because a 200 px sidebar
+ * cannot show a version matrix and a code block.
+ *
+ * The same house rules as the other webviews apply: strict CSP, every label from
+ * `DetailModel.ui`, every interpolation escaped, no inline `style=`, and no state
+ * that is only a colour. Everything shown is either authoritative
+ * (`mcpp xpkg parse --json`, `mcpp.toml`) or explicitly attributed (the example
+ * code comes from the index's own CI-built test projects, and says so).
+ *
+ * The example block is tokenized by `indexModel.tokenizeCppLine` — a deliberately
+ * small highlighter: comments, strings, the preprocessor directive, a short
+ * keyword list and punctuation. It is not a parser and is not meant to be.
+ */
+
+import {
+  BADGE_UI,
+  surfaceLabel,
+  tokenizeCppLine,
+  type BadgeKey,
+  type Surface,
+} from "./indexModel";
+
+/** One platform's row in the version matrix. */
+export interface DetailVersionGroup {
+  platform: string;
+  versions: string[];
+  /** The platform this extension host is running on. */
+  current: boolean;
+}
+
+/** One declared dependency, as far as it is cheaply known. */
+export interface DetailDependency {
+  id: string;
+  version?: string;
+  /** The version the project's `mcpp.lock` resolved, when it is known. */
+  resolved?: string;
+}
+
+/** One window of real example code. */
+export interface DetailSnippet {
+  file: string;
+  startLine: number;
+  lines: string[];
+  usageLine: number;
+}
+
+/** The outcome of the last `mcpp add`, shown in place. */
+export interface DetailResult {
+  /** `pending` is the client's own "I asked the host" line, replaced by the answer. */
+  state: "ok" | "error" | "pending";
+  message: string;
+}
+
+/** The workspace's own answer about one package. */
+export interface DetailInstalled {
+  version: string;
+  /** Declared under `[dev-dependencies]`. */
+  dev: boolean;
+}
+
+export interface DetailModel {
+  /** Everything is already localized by the caller. */
+  ui: Record<string, string>;
+  id: string;
+  name: string;
+  description?: string;
+  licenses: string[];
+  repo?: string;
+  registry: string;
+  surface?: Surface;
+  surfaces: Surface[];
+  badges: BadgeKey[];
+  /** The version matrix, current platform first. */
+  versions: DetailVersionGroup[];
+  /** Every version the current platform has, greatest first. */
+  currentVersions: string[];
+  /** What `mcpp add` would use by default. */
+  latest?: string;
+  /**
+   * The version this workspace already asks for — `mcpp.toml` first, then
+   * `mcpp.lock` — so the page can say "you have this one" and offer the switch
+   * instead of a blind add. Absent when the project does not depend on the
+   * package, or when the dependency names no version (a path or git entry).
+   */
+  installed?: DetailInstalled;
+  standard?: string;
+  dependencies: DetailDependency[];
+  includeDirs: string[];
+  targets: string[];
+  snippets: DetailSnippet[];
+  /** The example project the snippets come from, when there is one. */
+  exampleProject?: string;
+  /**
+   * How a reader brings the package into code (§22): the example project's
+   * real `import …;` / `#include …` lines when there are any, else the honest
+   * synthetic form for the surface. Empty when the surface is not importable.
+   */
+  usage: string[];
+  /** The index site's package page; omitted for a registry that has no site. */
+  indexUrl?: string;
+  /** `mcpp add {0}@{1}` / with `--dev`, so the preview and the run agree. */
+  commandTemplate: string;
+  commandDevTemplate: string;
+  /** Set when `mcpp xpkg parse` could not be read; the page still renders. */
+  parseNotice?: string;
+  /** The data source, in plain words, for the footer. */
+  dataSource: string;
+  result?: DetailResult;
+}
+
+export interface DetailAssets {
+  cspSource: string;
+  nonce: string;
+  styleUri: string;
+}
+
+/** The `ui` keys the renderer reads, so the caller and the renderer cannot drift. */
+export const DETAIL_UI = {
+  htmlLang: "detail.htmlLang",
+  title: "detail.title",
+  overview: "detail.overview",
+  license: "detail.license",
+  repo: "detail.repo",
+  openRepo: "detail.openRepo",
+  registry: "detail.registry",
+  surface: "detail.surface",
+  surfaceExternal: "detail.surface.external",
+  standard: "detail.standard",
+  versions: "detail.versions",
+  versionsAll: "detail.versions.all",
+  versionsCurrent: "detail.versions.current",
+  versionsNone: "detail.versions.none",
+  versionsPick: "detail.versions.pick",
+  dependencies: "detail.dependencies",
+  dependenciesNone: "detail.dependencies.none",
+  dependenciesHint: "detail.dependencies.hint",
+  resolved: "detail.resolved",
+  code: "detail.code",
+  codeNone: "detail.code.none",
+  codeSource: "detail.code.source",
+  codeProject: "detail.code.project",
+  add: "detail.add",
+  addDev: "detail.addDev",
+  switchTo: "detail.switchTo",
+  alreadyAdded: "detail.alreadyAdded",
+  installed: "detail.installed",
+  opening: "detail.opening",
+  addLatest: "detail.addLatest",
+  addNoVersion: "detail.add.noVersion",
+  command: "detail.command",
+  usage: "detail.usage",
+  copy: "detail.copy",
+  copied: "detail.copied",
+  copying: "detail.copying",
+  indexLink: "detail.indexLink",
+  badgeExamples: BADGE_UI.examples.key,
+  badgeCn: BADGE_UI.cn.key,
+  badgeOpenkalEcosystem: BADGE_UI["openkal-ecosystem"].key,
+  badgeOpenkalCompat: BADGE_UI["openkal-compat"].key,
+  badgeOpenkalPosix: BADGE_UI["openkal-posix"].key,
+  badgeOpenkalPlatform: BADGE_UI["openkal-platform"].key,
+  targets: "detail.targets",
+  includeDirs: "detail.includeDirs",
+} as const;
+
+const BADGE_KEY_UI: Readonly<Record<BadgeKey, string>> = {
+  examples: DETAIL_UI.badgeExamples,
+  cn: DETAIL_UI.badgeCn,
+  "openkal-ecosystem": DETAIL_UI.badgeOpenkalEcosystem,
+  "openkal-compat": DETAIL_UI.badgeOpenkalCompat,
+  "openkal-posix": DETAIL_UI.badgeOpenkalPosix,
+  "openkal-platform": DETAIL_UI.badgeOpenkalPlatform,
+};
+
+/**
+ * What the page says to the host.
+ *
+ * There is no `ready`: the document is already the whole model, and a page that
+ * announces its own load only invites the host to render it again — which is
+ * exactly the reload loop the *library sidebar* shipped with (see the note in
+ * `libraryHtml.ts`). This host happened to answer `ready` with an empty `return`,
+ * so the trap never fired here; it is gone all the same.
+ */
+export type DetailMessage =
+  | { type: "add"; version: string; dev: boolean }
+  | { type: "openUrl"; url: string }
+  | { type: "copy"; text: string };
+
+export type UiLabel = (key: string) => string;
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeCsp(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function attribute(name: string, value: string | number | undefined): string {
+  return value === undefined ? "" : ` ${name}="${escapeHtml(String(value))}"`;
+}
+
+function flag(name: string, on: boolean): string {
+  return on ? ` ${name}` : "";
+}
+
+/** `{0}`-style substitution into an already-localized ui string. */
+function fill(label: UiLabel, key: string, args: readonly (string | number)[]): string {
+  return label(key).replace(/\{(\d+)\}/g, (whole, index: string) => {
+    const value = args[Number(index)];
+    return value === undefined ? whole : String(value);
+  });
+}
+
+function badgeLabels(badges: readonly BadgeKey[], label: UiLabel): string[] {
+  return badges.map((badge) => label(BADGE_KEY_UI[badge]));
+}
+
+/** One source line, tokenized. The renderer escapes every token. */
+function renderLine(line: string, usage: boolean): string {
+  if (line.length === 0) {
+    return "\n";
+  }
+  const tokens = tokenizeCppLine(line)
+    .map((token) => `<span class="tok-${token.kind}">${escapeHtml(token.text)}</span>`)
+    .join("");
+  return `<span class="code-line"${flag("data-usage", usage)}>${tokens}</span>\n`;
+}
+
+function renderSnippets(model: DetailModel, label: UiLabel): string {
+  if (model.snippets.length === 0) {
+    return `<p class="detail-hint">${escapeHtml(label(DETAIL_UI.codeNone))}</p>`;
+  }
+  const blocks = model.snippets.map((snippet) => {
+    const lines = snippet.lines
+      .map((line, index) => renderLine(line, snippet.startLine + index === snippet.usageLine))
+      .join("");
+    const caption = fill(label, DETAIL_UI.codeSource, [snippet.file, snippet.startLine]);
+    return [
+      `<pre class="detail-code"><code>${lines}</code></pre>`,
+      `<p class="detail-code-file">${escapeHtml(caption)}</p>`,
+    ].join("\n");
+  });
+  return blocks.join("\n");
+}
+
+/**
+ * The version matrix, as the page's **selector**: each version is a button that
+ * aims the command at the top of the page at itself.
+ *
+ * A `<select>` and a printed list of the same versions used to sit in two
+ * different places, and only the select was interactive, so the list was
+ * something to read and the choice was something else to find. One clickable
+ * list is both.
+ */
+function renderVersions(model: DetailModel, label: UiLabel): string {
+  if (model.versions.length === 0) {
+    return `<p class="detail-hint">${escapeHtml(label(DETAIL_UI.versionsNone))}</p>`;
+  }
+  const groups = model.versions
+    .map((group) => {
+      const list =
+        group.versions.length === 0
+          ? `<span class="detail-version-empty">—</span>`
+          : group.versions
+              .map((version) => {
+                const installed = model.installed !== undefined && model.installed.version === version;
+                return (
+                  `<button type="button" class="detail-version" data-version="${escapeHtml(version)}"` +
+                  `${flag("data-selected", version === model.latest)}${flag("data-installed", installed)}>` +
+                  `${escapeHtml(version)}</button>` +
+                  // The word, not the colour: a reader who cannot see the hue still
+                  // learns that this is the version in their manifest.
+                  (installed ? `<span class="detail-installed">${escapeHtml(label(DETAIL_UI.installed))}</span>` : "")
+                );
+              })
+              .join("");
+      return (
+        `<li class="detail-version-group"${flag("data-current", group.current)}>` +
+        `<span class="detail-platform">${escapeHtml(group.platform)}</span>` +
+        `<span class="detail-version-list">${list}</span>` +
+        (group.current ? `<span class="detail-current">${escapeHtml(label(DETAIL_UI.versionsCurrent))}</span>` : "") +
+        `</li>`
+      );
+    })
+    .join("\n");
+  return [
+    `<ul class="detail-versions">`,
+    groups,
+    `</ul>`,
+    `<p class="detail-hint">${escapeHtml(label(DETAIL_UI.versionsPick))}</p>`,
+  ].join("\n");
+}
+
+function renderDependencies(model: DetailModel, label: UiLabel): string {
+  if (model.dependencies.length === 0) {
+    return `<p class="detail-hint">${escapeHtml(label(DETAIL_UI.dependenciesNone))}</p>`;
+  }
+  const rows = model.dependencies.map((dependency) => {
+    const parts = [dependency.version ?? ""];
+    if (dependency.resolved !== undefined) {
+      parts.push(fill(label, DETAIL_UI.resolved, [dependency.resolved]));
+    }
+    return (
+      `<li><code>${escapeHtml(dependency.id)}</code>` +
+      (parts.length === 0 ? "" : ` — ${escapeHtml(parts.join(" · "))}`) +
+      `</li>`
+    );
+  });
+  return [
+    `<p class="detail-hint">${escapeHtml(label(DETAIL_UI.dependenciesHint))}</p>`,
+    `<ul class="detail-deps">`,
+    rows.join("\n"),
+    `</ul>`,
+  ].join("\n");
+}
+
+function renderMeta(model: DetailModel, label: UiLabel): string {
+  const parts: string[] = [
+    `<span class="badge">${escapeHtml(label(DETAIL_UI.registry))}: ${escapeHtml(model.registry)}</span>`,
+  ];
+  if (model.surface !== undefined) {
+    parts.push(
+      `<span class="badge">${escapeHtml(label(DETAIL_UI.surface))}: ${escapeHtml(surfaceLabel(model.surface, label))}</span>`,
+    );
+  }
+  if (model.standard !== undefined) {
+    parts.push(`<span class="badge">${escapeHtml(label(DETAIL_UI.standard))}: ${escapeHtml(model.standard)}</span>`);
+  }
+  for (const badge of badgeLabels(model.badges, label)) {
+    parts.push(`<span class="badge">${escapeHtml(badge)}</span>`);
+  }
+  for (const license of model.licenses) {
+    parts.push(`<span class="badge">${escapeHtml(license)}</span>`);
+  }
+  // The repository and index links are actions, not facts, so they live in the
+  // button row below rather than at the end of this line.
+  return [`<div class="detail-meta">`, parts.join("\n"), `</div>`].join("\n");
+}
+
+function renderExtras(model: DetailModel, label: UiLabel): string {
+  const blocks: string[] = [];
+  if (model.targets.length > 0) {
+    blocks.push(
+      `<p class="detail-hint">${escapeHtml(label(DETAIL_UI.targets))}: <code>${escapeHtml(model.targets.join(", "))}</code></p>`,
+    );
+  }
+  if (model.includeDirs.length > 0) {
+    blocks.push(
+      `<p class="detail-hint">${escapeHtml(label(DETAIL_UI.includeDirs))}: <code>${escapeHtml(model.includeDirs.join(", "))}</code></p>`,
+    );
+  }
+  return blocks.join("\n");
+}
+
+/**
+ * The primary block: what this page is *for*, immediately under the title.
+ *
+ * It used to be the last thing on the page, below four sections of prose, so the
+ * button a reader came for was the one thing they had to scroll to find. The
+ * version is chosen in the list below (`renderVersions`), and this block shows
+ * the command the choice produces.
+ */
+function renderActions(model: DetailModel, label: UiLabel): string {
+  const disabled = model.latest === undefined;
+  const command = fill(label, DETAIL_UI.command, [model.id, model.latest ?? "?"]);
+  // The label the reader first sees is the one the *client* would compute for the
+  // same selection, so the button never changes meaning under the pointer.
+  const alreadyInstalled = model.installed !== undefined && model.installed.version === model.latest;
+  const addLabel = alreadyInstalled
+    ? label(DETAIL_UI.alreadyAdded)
+    : model.installed === undefined || model.latest === undefined
+      ? label(DETAIL_UI.add)
+      : fill(label, DETAIL_UI.switchTo, [model.latest]);
+  const link = (url: string, text: string): string =>
+    `    <button type="button" data-secondary data-open-url="${escapeHtml(url)}">${escapeHtml(text)}</button>`;
+  // The command and each usage line carry their own copy button: both are
+  // things a reader pastes somewhere else — a terminal, a source file.
+  const copyButton = (data: string, text: string): string =>
+    `<button type="button" class="detail-copy" ${data}>${escapeHtml(text)}</button>`;
+  const usage =
+    model.usage.length === 0
+      ? []
+      : [
+          `  <p class="detail-hint">${escapeHtml(label(DETAIL_UI.usage))}</p>`,
+          ...model.usage.map(
+            (line) =>
+              `  <p class="detail-usage-line"><code>${escapeHtml(line)}</code>${copyButton(`data-copy="${escapeHtml(line)}"`, label(DETAIL_UI.copy))}</p>`,
+          ),
+        ];
+  return [
+    `<section class="detail-primary" data-section="add">`,
+    `  <div class="detail-actions">`,
+    `    <button type="button" id="detail-add" class="detail-add"${flag("disabled", disabled || alreadyInstalled)}${flag("data-installed", alreadyInstalled)}>${escapeHtml(addLabel)}</button>`,
+    `    <label class="detail-toggle"><input id="detail-dev" type="checkbox"><span>${escapeHtml(label(DETAIL_UI.addDev))}</span></label>`,
+    ...(model.repo === undefined ? [] : [link(model.repo, label(DETAIL_UI.openRepo))]),
+    ...(model.indexUrl === undefined ? [] : [link(model.indexUrl, label(DETAIL_UI.indexLink))]),
+    `  </div>`,
+    // The copy button sits beside the command, not inside it: `command.textContent`
+    // is what a click copies, and a button inside the paragraph would be copied too.
+    `  <div class="detail-command-row">`,
+    `    <p class="detail-command" id="detail-command" data-selected-version="${escapeHtml(model.latest ?? "")}" data-template="${escapeHtml(model.commandTemplate)}" data-template-dev="${escapeHtml(model.commandDevTemplate)}">${escapeHtml(command)}</p>`,
+    `    <button type="button" class="detail-copy" data-copy-command>${escapeHtml(label(DETAIL_UI.copy))}</button>`,
+    `  </div>`,
+    disabled
+      ? `  <p class="detail-hint">${escapeHtml(label(DETAIL_UI.addNoVersion))}</p>`
+      : `  <p class="detail-hint">${escapeHtml(label(DETAIL_UI.addLatest))}</p>`,
+    ...usage,
+    `  <p class="detail-result" id="detail-result" role="status"${attribute("data-state", model.result?.state)}${model.result === undefined ? " hidden" : ""}>${escapeHtml(model.result?.message ?? "")}</p>`,
+    `</section>`,
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
+}
+
+/**
+ * The client. It posts two things — `add` and `openUrl` — and applies
+ * the host's `{type:"result"}` in place, so running `mcpp add` never rebuilds the
+ * document and never resets the version the reader picked.
+ */
+function clientScript(initialModel: string): string {
+  return `(function () {
+  "use strict";
+  var api = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : undefined;
+  var state = ${initialModel};
+  var devInput = document.getElementById("detail-dev");
+  var command = document.getElementById("detail-command");
+  var result = document.getElementById("detail-result");
+  var addButton = document.getElementById("detail-add");
+  var version = command ? (command.getAttribute("data-selected-version") || "") : "";
+  var labels = (state && state.labels) || {};
+  var installed = state && state.installed ? state.installed : "";
+
+  function post(message) {
+    if (api) { api.postMessage(message); }
+  }
+
+  function fillTemplate(template, values) {
+    var out = template;
+    for (var index = 0; index < values.length; index += 1) {
+      out = out.split("{" + index + "}").join(String(values[index]));
+    }
+    return out;
+  }
+
+  function updateCommand() {
+    if (!command) { return; }
+    var dev = devInput ? devInput.checked === true : false;
+    var template = dev
+      ? (command.getAttribute("data-template-dev") || "")
+      : (command.getAttribute("data-template") || "");
+    command.setAttribute("data-selected-version", version);
+    command.textContent = fillTemplate(template, [state.id, version || "?"]);
+  }
+
+  /**
+   * The button's label and enabled state follow the selection: adding a new
+   * package, switching the version of one that is already there, or nothing to do
+   * because this is the version the manifest already asks for. The inert state
+   * carries the data-installed attribute, which is what paints it the thinned
+   * green of a thing already done.
+   */
+  function updateButton() {
+    if (!addButton) { return; }
+    if (!version) {
+      addButton.textContent = labels.add || "";
+      addButton.disabled = true;
+      addButton.removeAttribute("data-installed");
+      return;
+    }
+    if (installed && version === installed) {
+      addButton.textContent = labels.alreadyAdded || "";
+      addButton.disabled = true;
+      addButton.setAttribute("data-installed", "");
+      return;
+    }
+    addButton.textContent = installed
+      ? (labels.switchTo || "{0}").split("{0}").join(version)
+      : (labels.add || "");
+    addButton.disabled = false;
+    addButton.removeAttribute("data-installed");
+  }
+
+  /** One version button is the selection; the rest are alternatives. */
+  function selectVersion(next) {
+    version = next;
+    var buttons = document.querySelectorAll("[data-version]");
+    for (var index = 0; index < buttons.length; index += 1) {
+      var button = buttons[index];
+      if (button.getAttribute("data-version") === next) {
+        button.setAttribute("data-selected", "");
+      } else {
+        button.removeAttribute("data-selected");
+      }
+    }
+    updateCommand();
+    updateButton();
+  }
+
+  function showResult(payload) {
+    if (!result) { return; }
+    result.hidden = false;
+    result.setAttribute(
+      "data-state",
+      payload.state === "ok" ? "ok" : payload.state === "pending" ? "pending" : "error",
+    );
+    result.textContent = payload.message || "";
+  }
+
+  if (devInput) { devInput.addEventListener("change", updateCommand); }
+
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target || typeof target.closest !== "function") { return; }
+    var link = target.closest("[data-open-url]");
+    if (link) {
+      event.preventDefault();
+      var url = link.getAttribute("data-open-url") || "";
+      // Say something the instant the click lands: the host's answer replaces
+      // this line, and if it never arrives the reader can see that too.
+      showResult({ state: "pending", message: (labels.opening || "{0}").split("{0}").join(url) });
+      post({ type: "openUrl", url: url });
+      return;
+    }
+    var copy = target.closest("[data-copy-command], [data-copy]");
+    if (copy) {
+      // The command's own text is what gets copied — the button beside it, not
+      // inside it, is why the command's textContent is exactly the command.
+      var text = copy.hasAttribute("data-copy-command")
+        ? (command ? String(command.textContent || "") : "")
+        : String(copy.getAttribute("data-copy") || "");
+      if (!text) { return; }
+      showResult({ state: "pending", message: labels.copying || "" });
+      post({ type: "copy", text: text });
+      return;
+    }
+    var pick = target.closest("[data-version]");
+    if (pick) {
+      selectVersion(pick.getAttribute("data-version") || "");
+      return;
+    }
+    var add = target.closest("#detail-add");
+    if (add && !add.disabled) {
+      if (!version) { return; }
+      post({ type: "add", version: version, dev: devInput ? devInput.checked === true : false });
+    }
+  });
+
+  /** Move the "added" marker onto the version the project now asks for. */
+  function markInstalled(next) {
+    installed = next;
+    var marks = document.querySelectorAll(".detail-installed");
+    for (var index = 0; index < marks.length; index += 1) { marks[index].parentNode.removeChild(marks[index]); }
+    var buttons = document.querySelectorAll("[data-version]");
+    for (var index2 = 0; index2 < buttons.length; index2 += 1) {
+      var button = buttons[index2];
+      if (button.getAttribute("data-version") !== next) {
+        button.removeAttribute("data-installed");
+        continue;
+      }
+      button.setAttribute("data-installed", "");
+      var mark = document.createElement("span");
+      mark.className = "detail-installed";
+      mark.textContent = labels.installed || "";
+      button.parentNode.insertBefore(mark, button.nextSibling);
+    }
+    updateButton();
+  }
+
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (data && data.type === "result" && data.result) { showResult(data.result); }
+    if (data && data.added && data.added.version) { markInstalled(data.added.version); }
+  });
+
+  updateCommand();
+  updateButton();
+})();`;
+}
+
+/** The little state the client needs; the page is already rendered from the rest. */
+function clientState(model: DetailModel): Record<string, unknown> {
+  return {
+    id: model.id,
+    ...(model.latest === undefined ? {} : { latest: model.latest }),
+    // The three labels the button can wear, and the version the project already
+    // has: the client re-decides the label every time the selection changes, so
+    // the host cannot be the only one that knows what the button means. The
+    // `installed` word belongs here too — `markInstalled()` writes it next to
+    // the version button after a successful add, and an empty string there is
+    // a marker nobody can read (§22).
+    labels: {
+      add: model.ui[DETAIL_UI.add] ?? "",
+      switchTo: model.ui[DETAIL_UI.switchTo] ?? "",
+      alreadyAdded: model.ui[DETAIL_UI.alreadyAdded] ?? "",
+      opening: model.ui[DETAIL_UI.opening] ?? "",
+      installed: model.ui[DETAIL_UI.installed] ?? "",
+      copying: model.ui[DETAIL_UI.copying] ?? "",
+    },
+    ...(model.installed === undefined ? {} : { installed: model.installed.version }),
+  };
+}
+
+/** A model embedded in the page's own script; `<` is escaped so it cannot close it. */
+function embedJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+/** The whole document. */
+export function renderDetailHtml(model: DetailModel, assets: DetailAssets): string {
+  const label: UiLabel = (key) => model.ui[key] ?? key;
+  const csp = `default-src 'none'; style-src ${assets.cspSource}; script-src 'nonce-${assets.nonce}'; img-src ${assets.cspSource}`;
+  const title = fill(label, DETAIL_UI.title, [model.id]);
+  const currentPlatform = model.versions.find((group) => group.current)?.platform;
+  const versionsHeading =
+    currentPlatform === undefined ? label(DETAIL_UI.versionsAll) : fill(label, DETAIL_UI.versions, [currentPlatform]);
+  return `<!DOCTYPE html>
+<html lang="${escapeHtml(model.ui[DETAIL_UI.htmlLang] ?? "")}">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${escapeCsp(csp)}">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${escapeHtml(assets.styleUri)}">
+<title>${escapeHtml(title)}</title>
+</head>
+<body class="detail">
+<header class="detail-header">
+  <h1 class="detail-title">${escapeHtml(model.id)}</h1>
+  ${model.description === undefined ? "" : `<p class="detail-description">${escapeHtml(model.description)}</p>`}
+  ${renderMeta(model, label)}
+</header>
+<main>
+  ${renderActions(model, label)}
+  <section class="detail-section" data-section="versions">
+    <h2>${escapeHtml(versionsHeading)}</h2>
+    ${renderVersions(model, label)}
+  </section>
+  <section class="detail-section" data-section="dependencies">
+    <h2>${escapeHtml(label(DETAIL_UI.dependencies))}</h2>
+    ${renderDependencies(model, label)}
+  </section>
+  <section class="detail-section" data-section="code">
+    <h2>${escapeHtml(label(DETAIL_UI.code))}</h2>
+    ${renderSnippets(model, label)}
+    ${model.exampleProject === undefined ? "" : `<p class="detail-hint">${escapeHtml(fill(label, DETAIL_UI.codeProject, [model.exampleProject]))}</p>`}
+  </section>
+  <section class="detail-section" data-section="build">
+    <h2>${escapeHtml(label(DETAIL_UI.overview))}</h2>
+    ${renderExtras(model, label)}
+    ${model.parseNotice === undefined ? "" : `<p class="detail-hint">${escapeHtml(model.parseNotice)}</p>`}
+  </section>
+</main>
+<footer class="detail-footer" role="note">${escapeHtml(model.dataSource)}</footer>
+<script nonce="${escapeHtml(assets.nonce)}">
+${clientScript(embedJson(clientState(model)))}
+</script>
+</body>
+</html>
+`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Decode one `postMessage` payload. Webview input is untrusted: anything that is
+ * not one of the three shapes is dropped. `openUrl` is restricted to `https`
+ * here as well as in the host, so a compromised document cannot ask the host to
+ * open a `file:` or `command:` uri.
+ */
+export function decodeDetailMessage(raw: unknown): DetailMessage | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  switch (raw.type) {
+    case "add":
+      return nonEmptyString(raw.version) && typeof raw.dev === "boolean"
+        ? { type: "add", version: raw.version, dev: raw.dev }
+        : undefined;
+    case "openUrl":
+      return typeof raw.url === "string" && raw.url.startsWith("https://")
+        ? { type: "openUrl", url: raw.url }
+        : undefined;
+    case "copy":
+      // Clipboard content, same trust level as the https-restricted url. The
+      // cap is 16 KiB — far above any command or usage line, low enough that a
+      // hostile document cannot park a novel in the clipboard — and everything
+      // else about the text is the user's own click.
+      return nonEmptyString(raw.text) && raw.text.length <= 16_384
+        ? { type: "copy", text: raw.text }
+        : undefined;
+    default:
+      return undefined;
+  }
+}

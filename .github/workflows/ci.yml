@@ -13,35 +13,216 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-jobs:
-  unit-and-package:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: npm run package
-      - name: Verify VSIX archive
-        run: unzip -t mcpp-vscode-*.vsix
-      - name: Verify extension dependency is declared
-        run: node -e 'const p=require("./package.json"); if (p.extensionDependencies?.[0] !== "sunrisepeak.mcpp-language-server") process.exit(1)'
+env:
+  NODE_VERSION: 22
 
-  extension-host-e2e:
+jobs:
+  # The consistency gates plus the unit suite. `npm test` runs them in order, so a
+  # failure here means either the code or one of the generated artefacts is wrong.
+  gates:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Registry, translation and unit gates
+        run: npm test
+
+  # The snapshots are generated from a checkout of mcpp. Without that checkout the
+  # drift gate skips, so this job fetches it and makes the gate real: if mcpp's
+  # directive table or manifest parser moved, this fails and a human refreshes the
+  # snapshot in a reviewable commit.
+  generated-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: mcpp-community/mcpp
+          path: .mcpp-source
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: The committed snapshots match the current mcpp
+        env:
+          MCPP_REPO: ${{ github.workspace }}/.mcpp-source
+        run: npm run check:generated
+      - name: The settings documentation matches the registry
+        run: |
+          npm run gen:docs
+          git diff --exit-code docs/settings.md
+
+  package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: Run Extension Host smoke tests
-        run: xvfb-run -a npm run test:e2e
-      - name: Check packaged extension is not a second language client
+      - run: npm run package
+      - name: Verify the VSIX archive
+        run: unzip -t mcpp-vscode-*.vsix
+      - name: The manifest keeps its promises
+        run: |
+          node -e '
+            const p = require("./package.json");
+            const fail = (message) => { console.error(message); process.exit(1); };
+            if (p.extensionDependencies?.[0] !== "sunrisepeak.mcpp-language-server") fail("the dependency moved");
+            if (p.extensionDependencies.some((id) => id.includes("clangd"))) fail("clangd is back in the dependency list");
+            if (p.dependencies?.["vscode-languageclient"] || p.devDependencies?.["vscode-languageclient"]) fail("a second language client crept in");
+            if ((p.activationEvents ?? []).some((event) => event.startsWith("onCommand:"))) fail("onCommand activations are derived since 1.74");
+            if (!p.contributes?.viewsContainers?.activitybar?.length) fail("the view container disappeared");
+            console.log("manifest ok");
+          '
+      - name: The VSIX carries the runtime artefacts
+        run: |
+          set -euo pipefail
+          VSIX=$(ls mcpp-vscode-*.vsix)
+          for entry in \
+            extension/l10n/bundle.l10n.zh-cn.json \
+            extension/package.nls.json \
+            extension/package.nls.zh-cn.json \
+            extension/dist/data/config-registry.json \
+            extension/media/settings.css; do
+            unzip -l "$VSIX" | grep -q "$entry" || { echo "missing from the VSIX: $entry"; exit 1; }
+          done
+          echo "VSIX contents ok"
+      - name: The VSIX stays small and free of local state
+        run: |
+          set -euo pipefail
+          VSIX=$(ls mcpp-vscode-*.vsix)
+          SIZE=$(stat -c %s "$VSIX")
+          COUNT=$(unzip -l "$VSIX" | tail -1 | awk '{print $2}')
+          echo "VSIX: $COUNT files, $((SIZE / 1024)) KiB"
+          if [ "$COUNT" -gt 200 ]; then echo "the VSIX has $COUNT files; something local leaked in"; exit 1; fi
+          if [ "$SIZE" -gt 1048576 ]; then echo "the VSIX is over 1 MiB ($SIZE bytes)"; exit 1; fi
+          for forbidden in .dev-profile/ .agents/ test/ tools/ src/ node_modules/; do
+            if unzip -l "$VSIX" | grep -q "extension/$forbidden"; then
+              echo "leaked into the VSIX: $forbidden"
+              exit 1
+            fi
+          done
+      - name: No second language client in the build output
         run: |
           test ! -e dist/src/languageClient.js
-          ! rg -n 'vscode-languageclient|mcppls\.serve' dist/src package.json
+          # A *dependency*, not a mention. `dist` carries the compiled comments
+          # that explain why this extension does not drive a language client, and
+          # grepping for the bare name failed the build on those comments alone.
+          ! grep -rqsE "require\(['\"]vscode-languageclient['\"]\)|from ['\"]vscode-languageclient['\"]" dist/src package.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: mcpp-vscode-*.vsix
+          if-no-files-found: error
+
+  # One Extension Host run per mcppls variant: a full stub, one that only offers the
+  # old restart, one that renamed its command, one that exposes no state API, and one
+  # whose state API throws. The promise is that any of them leaves mcpp usable.
+  # All three desktop platforms, because the spawn and path handling the suite
+  # exercises is exactly what differs between them.
+  extension-host-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      # The pinned VS Code download is ~135 MB per platform; caching it makes the
+      # e2e both faster and immune to CDN blips (a real macos-14 run was reset
+      # three times in a row by the edge). runTests reuses an existing copy.
+      - name: Cache the pinned VS Code download
+        uses: actions/cache@v4
+        with:
+          path: .vscode-test
+          key: vscode-1.91.0-${{ runner.os }}-${{ runner.arch }}
+      - name: Extension Host smoke tests against every mcppls variant
+        # Only Linux needs a virtual display; macOS and Windows runners launch
+        # the downloaded VS Code headless-style without one.
+        shell: bash
+        run: |
+          if [ "$(uname)" = "Linux" ]; then
+            xvfb-run -a npm run test:e2e:one
+          else
+            npm run test:e2e:one
+          fi
+
+  # The only check that proves the dependency resolves end to end: install the packed
+  # VSIX into a private profile and let VS Code pull the platform build of the
+  # language service — on every desktop platform, because each pulls its own build.
+  isolated-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    needs: package
+    defaults:
+      run:
+        # The steps below are written against a POSIX shell; windows-latest ships
+        # Git Bash, so `bash` runs them there unchanged.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: vsix
+      # Same cache as the e2e job: a hit skips the ~135 MB download entirely, and
+      # the CDN edge has been seen resetting macos downloads three times in a row.
+      - name: Cache the pinned VS Code download
+        uses: actions/cache@v4
+        with:
+          path: .vscode-test
+          key: vscode-1.91.0-${{ runner.os }}-${{ runner.arch }}
+      # The runners ship no `code` on PATH. Fetch the same pinned download the
+      # e2e job uses (1.91.0, the oldest VS Code `engines` claims) and expose its
+      # CLI as $CODE — on Windows that is bin/code.cmd, which bash runs fine.
+      - name: Download the VS Code CLI
+        run: |
+          set -euo pipefail
+          CODE=$(node tools/ci-vscode-cli.mjs | tr '\\' '/')
+          "$CODE" --version
+          echo "CODE=$CODE" >> "$GITHUB_ENV"
+      - name: Install into a private profile
+        run: |
+          set -euo pipefail
+          "$CODE" --extensions-dir "$PWD/.ci-extensions" --user-data-dir "$PWD/.ci-user" \
+            --install-extension mcpp-vscode-*.vsix --force
+          "$CODE" --extensions-dir "$PWD/.ci-extensions" --user-data-dir "$PWD/.ci-user" \
+            --install-extension sunrisepeak.mcpp-language-server
+      - name: The dependency resolved, with a version
+        run: |
+          set -euo pipefail
+          # `tr -d '\r'`: on Windows the CLI output ends in CRLF, which would
+          # ride along into the version report below.
+          LIST=$("$CODE" --extensions-dir "$PWD/.ci-extensions" --user-data-dir "$PWD/.ci-user" \
+            --list-extensions --show-versions | tr -d '\r')
+          echo "$LIST"
+          echo "$LIST" | grep -q "^mcpp-community.mcpp-vscode@" || { echo "the extension is missing"; exit 1; }
+          echo "$LIST" | grep -q "^sunrisepeak.mcpp-language-server@" || { echo "the dependency did not resolve"; exit 1; }
+          VERSION=$(printf '%s\n' "$LIST" | sed -n 's/^sunrisepeak\.mcpp-language-server@//p')
+          echo "resolved mcppls $VERSION"
+          echo "resolved mcppls \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
