@@ -177,5 +177,5 @@ git diff --cached --stat
 git commit -m "fix: release project lock before IDE reconciliation"
 ```
 
-预期：提交作者为 `wellwei <ywellwei@outlook.com>`，发布工作流等待维护者推送
+预期：提交作者为 `wellwei`（邮箱见 git 提交历史），发布工作流等待维护者推送
 `v0.2.1` tag 后在 GitHub Actions 中进行真实验证。

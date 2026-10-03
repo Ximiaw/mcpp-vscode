@@ -1396,7 +1396,7 @@ buildscript 6 / projects 3 / util 3 / i18n 2 / commands 2 / workflows 1）+ 根 
 
 ### 22.2 详情页补"引入方式"（`import xxx;` / `#include …`）
 
-先量了三件事再设计：真实工程（`/home/speak/portable`）的 manifest 写 `openkal = "0.12.0"`，
+先量了三件事再设计：一个真实工程的 manifest 写 `openkal = "0.12.0"`，
 源码写 `import openkal.types;`——**模块包按短名导入**；本机索引没有 `tests/examples/`，
 "从示例代码提取真实行"在这台机器上会退化为空；`mcpp xpkg parse` 不暴露任何模块/头文件名。
 
@@ -1446,7 +1446,7 @@ buildscript 6 / projects 3 / util 3 / i18n 2 / commands 2 / workflows 1）+ 根 
 
 ## 23. round 10：外部深度评审的修复（2026-10-03，`pr17-review.md`）
 
-外部评审（`~/Desktop/tmp/github/pr17-review.md`）+ 本会话逐条对照当前分支复核后落地：
+外部深度评审（评审稿为本地文件，未入库）+ 逐条对照当前分支复核后落地：
 
 | 项 | 修复 | commit |
 | --- | --- | --- |
